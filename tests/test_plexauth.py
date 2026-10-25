@@ -130,6 +130,66 @@ def test_the_client_identifier_survives_a_restart(tmp_path):
     assert PlexIdentity(config).client_id == first
 
 
+def test_room_credentials_are_separate_and_do_not_replace_legacy_player(tmp_path):
+    config = Config(config_dir=str(tmp_path), sonos_devices={"office": "192.168.1.34",
+                                                          "kitchen": "192.168.1.157"})
+    legacy = PlexIdentity(config)
+    legacy.token = "office-token"
+    legacy.save()
+    kitchen = PlexIdentity(config, room_uid="kitchen")
+    assert not kitchen.linked
+    kitchen.token = "kitchen-token"
+    kitchen.save()
+    assert PlexIdentity(config).token == "office-token"
+    assert PlexIdentity(config, room_uid="kitchen").token == "kitchen-token"
+    assert kitchen.path.stat().st_mode & 0o777 == 0o600
+    assert kitchen.path.parent.stat().st_mode & 0o777 == 0o700
+    kitchen.forget()
+    assert PlexIdentity(config).token == "office-token"
+
+
+def test_room_identity_rejects_unconfigured_uid_and_mismatched_state(tmp_path):
+    config = Config(config_dir=str(tmp_path), sonos_devices={"kitchen": "192.168.1.157"})
+    with pytest.raises(PlexAuthError):
+        PlexIdentity(config, room_uid="unconfigured")
+    room = PlexIdentity(config, room_uid="kitchen")
+    room.path.write_text(json.dumps({"client_id": "wrong-player", "token": "secret"}))
+    with pytest.raises(PlexAuthError):
+        PlexIdentity(config, room_uid="kitchen")
+
+
+async def test_bridge_selects_separate_room_token_and_preserves_legacy(tmp_path):
+    from calderabridge.bridge import Bridge
+
+    config = Config(config_dir=str(tmp_path), sonos_devices={"office": "192.168.1.34",
+                                                          "kitchen": "192.168.1.157"})
+    bridge = Bridge(config)
+    bridge.identity.client_id = config.machine_identifier("office")
+    bridge.identity.token = "office-token"
+    async with aiohttp.ClientSession() as session:
+        bridge._session = session
+        bridge.account = PlexAccount(bridge.identity, session)
+        assert bridge._account_for_room("office") is bridge.account
+        # Linking can finish while the bridge is already running.
+        assert bridge._account_for_room("kitchen") is bridge.account
+        room = PlexIdentity(config, room_uid="kitchen")
+        room.token = "kitchen-token"
+        room.save()
+        account = bridge._account_for_room("kitchen")
+        assert account.identity.token == "kitchen-token"
+        assert account.identity.client_id == config.machine_identifier("kitchen")
+        assert bridge._account_for_room("office").identity.token == "office-token"
+        assert bridge._account_for_room("unconfigured") is None
+
+
+def test_device_lookup_never_uses_an_unidentified_account_record():
+    from calderabridge.plexauth import device_id_from_xml
+
+    body = '<MediaContainer><Device id="unrelated"/><Device id="mine" clientIdentifier="room"/></MediaContainer>'
+    assert device_id_from_xml(body, "room") == "mine"
+    assert device_id_from_xml('<Device id="unrelated"/>', "room") is None
+
+
 def test_a_token_is_written_to_the_config_volume(tmp_path):
     identity = PlexIdentity(Config(config_dir=str(tmp_path)))
     identity.token = "tok-1"

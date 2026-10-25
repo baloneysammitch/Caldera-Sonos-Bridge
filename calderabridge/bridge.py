@@ -133,6 +133,7 @@ class Bridge:
 
         self.identity = PlexIdentity(config)
         self.account: PlexAccount | None = None
+        self._room_accounts: dict[str, PlexAccount] = {}
         self.plex: PlexClient | None = None
 
         self._ports = PortAllocator(
@@ -394,7 +395,9 @@ class Bridge:
             player.update_zone(zone)
             if renamed and self.account:
                 LOGGER.info("Room renamed to %s; re-publishing", zone.name)
-                self.account.forget_published(player.machine_identifier)
+                account = self._account_for_room(uid)
+                if account:
+                    account.forget_published(player.machine_identifier)
                 self._published.pop(uid, None)
 
     # ------------------------------------------------------------------
@@ -531,14 +534,31 @@ class Bridge:
         await self.stop()
 
     async def _publish_room(self, player: RoomPlayer) -> None:
-        if not self.account or not self.identity.linked:
+        account = self._account_for_room(player.zone.uid)
+        if not account or not account.identity.linked:
             return
         uri = f"http://{self.bridge_ip}:{player.port}"
-        if await self.account.publish(player.machine_identifier, player.name, uri):
+        if await account.publish(player.machine_identifier, player.name, uri):
             self._published[player.zone.uid] = uri
             player.published_uri = uri
         else:
             player.published_uri = ""
+
+    def _account_for_room(self, uid: str) -> PlexAccount | None:
+        """Use separately revocable room credentials; retain the legacy linked player."""
+        if uid not in self.config.sonos_devices:
+            return None
+        if uid in self._room_accounts:
+            return self._room_accounts[uid]
+        client_id = self.config.machine_identifier(uid)
+        path = Path(self.config.config_dir) / "players" / f"{client_id}.json"
+        if path.exists() and self._session:
+            identity = PlexIdentity(self.config, room_uid=uid)
+            if identity.linked:
+                account = PlexAccount(identity, self._session)
+                self._room_accounts[uid] = account
+                return account
+        return self.account
 
     # ------------------------------------------------------------------
     # Settings page actions
@@ -566,6 +586,8 @@ class Bridge:
         if "name_suffix" in changed and self.account:
             # The name is part of what the account holds, so it has to go again.
             self.account.forget_published()
+            for account in self._room_accounts.values():
+                account.forget_published()
             for player in self._room_list():
                 await self._publish_room(player)
         if changed & {"include_zones", "exclude_zones", "static_hosts"}:
@@ -635,12 +657,16 @@ class Bridge:
         a stale record like that is enough to hide the copy of a room a
         controller found on the network by itself.
         """
-        if self.account:
+        for account in [self.account, *self._room_accounts.values()]:
+            if account is None:
+                continue
             with contextlib.suppress(Exception):
-                removed = await self.account.remove_all()
+                removed = await account.remove_all()
                 if removed:
                     LOGGER.info("Removed %d room(s) from the Plex account", removed)
-            self.account.forget_published()
+            account.forget_published()
+            account.identity.forget()
+        self._room_accounts.clear()
         self.identity.forget()
         self._published.clear()
         LOGGER.info("Plex account unlinked")

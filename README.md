@@ -91,11 +91,22 @@ from approved LAN clients. The status page defaults to loopback; if a separate
 proxy is used, bind it only to that private interface. Terminate TLS at your
 existing reverse proxy. Introduce no WAN forward or public admin route.
 
-For initial single-room Plex linking, run `python -m calderabridge.link --name
-"Office (Sonos trial)"` with the same environment/config mount. It prints a code
-for https://plex.tv/link and saves the device credential privately. Start/restart
-the bridge only after linking is complete and playback is idle. Existing linked
-configuration can be retained without changing the stable room identifier.
+For Plex linking, run `python -m calderabridge.link --uid RINCON_EXAMPLE01400
+--name "Kitchen (Sonos)"` with the same environment/config mount. Repeat for each
+allowlisted playable room, entering its code at https://plex.tv/link. Each room
+has a separately revocable credential in `players/<stable-room-uuid>.json` (0600,
+parent 0700). Existing `plex.json` identities remain supported without relinking
+or changing their UUID. The CLI retains already linked credentials. Start/restart
+the bridge after linking is complete and playback is idle.
+
+List every playable room's exact UID/IP in `SONOS_DEVICES`, separated by commas,
+and its IP in `SONOS_HOSTS`. `INCLUDE_ZONES` accepts comma-separated room names.
+Retain port assignments in `ports.json` and allow only those player ports through
+the LAN firewall. Bonded pairs and home-theater satellites stay in their native
+Sonos room and appear as one player; invisible satellites are not added as
+independent endpoints. The standalone guard permits those native bonds while
+rejecting groups containing other playable rooms. Set `UNGROUP_ON_PLAY=false`
+to preserve native grouping. This does not bypass the fresh topology guard.
 
 Optional administrator API access requires `ADMIN_TOKEN_FILE` pointing to a
 process-owned 0600 file containing at least 32 random characters. Supply it in an

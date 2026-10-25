@@ -11,13 +11,21 @@ from .config import Config
 from .plexauth import PlexAccount, PlexIdentity
 
 
-async def link(name):
+async def link(name, uid=""):
     config = Config.from_env()
-    if len(config.sonos_devices) != 1:
-        raise SystemExit("Link one configured Sonos room per invocation/instance.")
+    if not uid:
+        if len(config.sonos_devices) != 1:
+            raise SystemExit("Select an allowlisted Sonos room with --uid.")
+        uid = next(iter(config.sonos_devices))
+    if uid not in config.sonos_devices:
+        raise SystemExit("Selected room is not in SONOS_DEVICES.")
     identity = PlexIdentity(config)
-    uid = next(iter(config.sonos_devices))
-    identity.client_id = config.machine_identifier(uid)
+    client_id = config.machine_identifier(uid)
+    if identity.client_id != client_id:
+        identity = PlexIdentity(config, room_uid=uid)
+    if identity.linked:
+        print("Player already linked; existing credential retained.")
+        return
     async with aiohttp.ClientSession() as session:
         account = PlexAccount(identity, session)
         pin = await account.request_pin(identity.client_id, name)
@@ -30,8 +38,9 @@ async def link(name):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True, help="Player name shown in Plex")
+    parser.add_argument("--uid", default="", help="Allowlisted Sonos room UID")
     args = parser.parse_args()
-    asyncio.run(link(args.name))
+    asyncio.run(link(args.name, args.uid))
 
 
 if __name__ == "__main__":

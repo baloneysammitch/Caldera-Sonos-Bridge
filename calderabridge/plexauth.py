@@ -75,7 +75,7 @@ def device_id_from_xml(body: object, client_id: str) -> str | None:
     for node in root.iter():
         if node.tag.rsplit("}", 1)[-1] != "Device":
             continue
-        if client_id and node.get("clientIdentifier") not in (client_id, None, ""):
+        if client_id and node.get("clientIdentifier") != client_id:
             continue
         found = node.get("id")
         if found:
@@ -109,13 +109,20 @@ class PlexIdentity:
     all claim to be the same room.
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, *, room_uid: str = "") -> None:
         self.config = config
         self.path = Path(config.config_dir) / IDENTITY_FILENAME
         self.client_id = str(uuid.uuid4())
-        self.token = config.plex_token
+        self._room_client = ""
+        if room_uid:
+            if room_uid not in config.sonos_devices:
+                raise PlexAuthError("Room is not in the configured Sonos allowlist")
+            self._room_client = config.machine_identifier(room_uid)
+            self.client_id = self._room_client
+            self.path = Path(config.config_dir) / "players" / f"{self.client_id}.json"
+        self.token = "" if room_uid else config.plex_token
         self.username = ""
-        self._token_from_env = bool(config.plex_token)
+        self._token_from_env = bool(self.token)
         self._load()
 
     # -- storage --------------------------------------------------------
@@ -128,6 +135,8 @@ class PlexIdentity:
         except (OSError, ValueError) as exc:
             LOGGER.warning("Ignoring unreadable %s: %s", self.path, exc)
             return
+        if self._room_client and saved.get("client_id") != self._room_client:
+            raise PlexAuthError("Saved room identity does not match the configured player")
         self.client_id = saved.get("client_id") or self.client_id
         self.username = saved.get("username", "") or ""
         # An explicit PLEX_TOKEN is a deliberate act and outranks a stored one.

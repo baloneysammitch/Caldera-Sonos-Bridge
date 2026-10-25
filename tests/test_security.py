@@ -294,7 +294,8 @@ async def test_mutation_requires_fresh_standalone_topology(config, mode):
         await NetworkPolicy(config).check_group(Topology(), uid)
 
 
-async def test_unchanged_standalone_topology_is_allowed(config):
+@pytest.mark.parametrize("bonded", [False, True])
+async def test_unchanged_standalone_topology_is_allowed(config, bonded):
     zone = ZoneInfo(uid="RINCON_AAA01400", name="Kitchen", ip="192.168.1.10")
 
     class Topology:
@@ -310,7 +311,9 @@ async def test_unchanged_standalone_topology_is_allowed(config):
             return zone
 
         def all_zones(self):
-            return [zone]
+            satellite = ZoneInfo(uid="BONDED", name="Kitchen", ip="192.168.1.20",
+                                 coordinator_uid=zone.uid, invisible=True)
+            return [zone, satellite] if bonded else [zone]
 
     await NetworkPolicy(config).check_group(Topology(), zone.uid)
 
