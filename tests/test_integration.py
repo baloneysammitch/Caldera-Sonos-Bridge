@@ -459,3 +459,26 @@ async def test_failed_fresh_topology_cannot_reuse_a_recent_success(bridge, house
         ) as response:
             assert response.status == 403
     assert "Pause" not in household.player.actions()
+
+
+async def test_paired_controller_can_resume_the_native_queue_after_restart(
+    bridge, household, fake_plex
+):
+    kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
+    url = f"http://127.0.0.1:{kitchen.port}/player/playback/"
+    headers = {"X-Plex-Client-Identifier": "restart-controller", "X-Plex-Token": "tok-123"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        assert (await session.get(url + "playMedia", params=play_params(fake_plex))).status == 200
+        assert (await session.get(url + "pause")).status == 200
+    assert household.player.transport_state == "PAUSED_PLAYBACK"
+    await bridge.stop()
+    restarted = Bridge(bridge.config)
+    await restarted.start()
+    try:
+        async with aiohttp.ClientSession(
+            headers={"X-Plex-Client-Identifier": "restart-controller"}
+        ) as session:
+            assert (await session.get(url + "play")).status == 200
+        assert household.player.transport_state == "PLAYING"
+    finally:
+        await restarted.stop()

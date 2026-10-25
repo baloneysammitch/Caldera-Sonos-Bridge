@@ -186,7 +186,7 @@ class SoapClient:
             "SOAPACTION": f'"{service_type}#{action}"',
             "Connection": "close",
         }
-        LOGGER.debug("SOAP -> %s %s %s", url, action, args or {})
+        LOGGER.debug("SOAP -> %s %s", url, action)
         try:
             async with self._session.post(
                 url,

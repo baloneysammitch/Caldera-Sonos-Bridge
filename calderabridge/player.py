@@ -306,10 +306,17 @@ class RoomPlayer:
 
     async def play(self) -> None:
         if not self._loaded:
-            return
-        await self._transport(lambda p: p.play())
-        self.state = STATE_PLAYING
-        self._wake()
+            # A process restart does not clear the speaker's native queue. Only
+            # resume an existing item belonging to our explicitly trusted PMS;
+            # do not take over a different service's paused playback.
+            position = await self.coordinator().get_position_info()
+            uri = position.get("TrackURI", "")
+            if not uri:
+                return
+            self.policy.validate_plex_url(uri)
+        if await self._transport(lambda p: p.play()):
+            self.state = STATE_PLAYING
+            self._wake()
 
     async def pause(self) -> None:
         await self._transport(lambda p: p.pause())
@@ -542,13 +549,15 @@ class RoomPlayer:
             return 1 if self._loaded else 0
         return self._loaded.index(self.current) + 1
 
-    async def _transport(self, action) -> None:
+    async def _transport(self, action) -> bool:
         try:
             await action(self.coordinator())
             self.last_error = ""
+            return True
         except (UPnPError, TimeoutError) as exc:
             self.last_error = str(exc)
             LOGGER.debug("%s: transport command failed: %s", self.zone.name, exc)
+            return False
 
     # ------------------------------------------------------------------
     # Reading state back

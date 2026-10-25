@@ -39,9 +39,7 @@ async def test_play_media_loads_the_sonos_queue(player, fake_sonos, fake_plex):
     assert "Play" in actions
 
     # The transport is pointed at the queue, not at one track.
-    assert fake_sonos.args_for("SetAVTransportURI")["CurrentURI"].startswith(
-        "x-rincon-queue:"
-    )
+    assert fake_sonos.args_for("SetAVTransportURI")["CurrentURI"].startswith("x-rincon-queue:")
     assert player.state == "playing"
     assert player.current is not None
     assert player.current.title == "Track 1"
@@ -214,9 +212,7 @@ async def test_mute(player, fake_sonos):
 # ----------------------------------------------------------------------
 # Following the speaker
 # ----------------------------------------------------------------------
-async def test_refresh_follows_a_track_change_sonos_made_itself(
-    player, fake_sonos, fake_plex
-):
+async def test_refresh_follows_a_track_change_sonos_made_itself(player, fake_sonos, fake_plex):
     await player.play_media(play_params(fake_plex))
     fake_sonos.advance()  # the speaker moved on by itself
 
@@ -351,9 +347,7 @@ async def test_status_summarises_the_room(player, fake_plex):
 # ----------------------------------------------------------------------
 # The queue changing under us
 # ----------------------------------------------------------------------
-async def test_refresh_queue_does_not_disturb_what_is_playing(
-    player, fake_sonos, fake_plex
-):
+async def test_refresh_queue_does_not_disturb_what_is_playing(player, fake_sonos, fake_plex):
     await player.play_media(play_params(fake_plex))
     playing = player.current
     loaded = list(fake_sonos.queue)
@@ -383,9 +377,7 @@ async def test_refresh_queue_without_a_server_is_a_no_op(player, fake_sonos):
     assert fake_sonos.calls == []
 
 
-async def test_volume_above_the_ceiling_is_clamped_for_plex(
-    config, zone, fake_sonos, plex_client
-):
+async def test_volume_above_the_ceiling_is_clamped_for_plex(config, zone, fake_sonos, plex_client):
     config.volume_limit = 50
     fake_sonos.volume = 90  # someone turned it up in the Sonos app
     player = RoomPlayer(
@@ -436,9 +428,7 @@ async def test_a_missing_token_is_named_precisely(player):
     assert "address" in player.last_error
 
 
-async def test_hi_res_tracks_reach_sonos_as_flac(
-    config, zone, fake_sonos, plex_client, fake_plex
-):
+async def test_hi_res_tracks_reach_sonos_as_flac(config, zone, fake_sonos, plex_client, fake_plex):
     fake_plex.track_kwargs = {"sample_rate": 192000, "bit_depth": 24}
     player = RoomPlayer(
         config, zone, StubTopology({zone.uid: zone}), fake_sonos, plex_client, 32600
@@ -529,9 +519,7 @@ async def hi_res_player(config, zone, fake_sonos, plex_client, fake_plex):
     from .conftest import StubTopology
 
     fake_plex.track_kwargs = {"sample_rate": 192000, "bit_depth": 24}
-    return RoomPlayer(
-        config, zone, StubTopology({zone.uid: zone}), fake_sonos, plex_client, 32701
-    )
+    return RoomPlayer(config, zone, StubTopology({zone.uid: zone}), fake_sonos, plex_client, 32701)
 
 
 async def test_hi_res_is_handed_over_as_lossless_without_a_rehearsal(
@@ -553,7 +541,9 @@ async def test_hi_res_is_handed_over_as_lossless_without_a_rehearsal(
     assert not [r for r in fake_plex.requests if "probe" in r]
 
 
-async def test_a_file_within_the_ceiling_never_touches_the_transcoder(player, fake_sonos, fake_plex):
+async def test_a_file_within_the_ceiling_never_touches_the_transcoder(
+    player, fake_sonos, fake_plex
+):
     await player.play_media(play_params(fake_plex))
     # Nothing to convert: the stored file is handed over as it is.
     assert not [r for r in fake_plex.requests if "transcode" in r]
@@ -562,9 +552,7 @@ async def test_a_file_within_the_ceiling_never_touches_the_transcoder(player, fa
 # ----------------------------------------------------------------------
 # A play queue that leaves the file details out
 # ----------------------------------------------------------------------
-async def test_a_queue_without_parts_still_plays_the_stored_files(
-    player, fake_sonos, fake_plex
-):
+async def test_a_queue_without_parts_still_plays_the_stored_files(player, fake_sonos, fake_plex):
     # Some servers answer a play queue with no Media or Part. Without them
     # every track looks like one that has to be transcoded, whatever it is.
     fake_plex.bare_queue = True
@@ -613,8 +601,27 @@ async def test_the_reason_a_track_is_transcoded_is_stated(player):
     assert "above what Sonos takes" in player._why_not_native(
         PlexTrack(part_key="/p/1.flac", container="flac", sample_rate=192000)
     )
-    assert "dsf" in player._why_not_native(
-        PlexTrack(part_key="/p/1.dsf", container="dsf")
-    )
+    assert "dsf" in player._why_not_native(PlexTrack(part_key="/p/1.dsf", container="dsf"))
 
 
+async def test_play_resumes_a_trusted_sonos_queue_after_process_state_is_lost(
+    player, fake_sonos, fake_plex
+):
+    uri = fake_plex.server().url("/library/parts/201/888/file.flac")
+    fake_sonos.queue = [(uri, "")]
+    fake_sonos.transport_state = "PAUSED_PLAYBACK"
+    assert not player._loaded
+    await player.play()
+    assert fake_sonos.transport_state == "PLAYING"
+    assert player.state == "playing"
+
+
+async def test_resume_will_not_take_over_an_untrusted_media_source(player, fake_sonos):
+    import pytest
+
+    from calderabridge.security import SecurityError
+
+    fake_sonos.queue = [("http://untrusted.example/song.mp3", "")]
+    with pytest.raises(SecurityError):
+        await player.play()
+    assert "Play" not in fake_sonos.actions()

@@ -30,6 +30,7 @@ apps can still change grouping independently of this bridge.
   fresh topology and rejects grouped rooms by default, including a coordinator
   with followers. Failure to refresh topology fails closed.
 - Command IDs are bounded and validated, and timeline XML attributes are escaped.
+  SOAP debug logging omits arguments, which can contain Plex credentials.
   The admin page also escapes its saved-settings query banner.
 - Admin writes are disabled unless a separate private administrator bearer-token
   file is configured. The default UI is a read-only status page. Settings JSON
@@ -114,3 +115,8 @@ python -m venv .venv
 Runtime dependencies are pinned with artifact hashes in `requirements.lock`.
 CI builds without publishing; image publication is an explicit manual workflow.
 No upstream issue/PR is automatically filed by the application or tests.
+
+Restart recovery preserves the room identity, ports and paired-controller records.
+The bridge can resume an existing native Sonos queue if its current URI belongs
+to the configured Plex server. Full Plex queue context is not persisted: select
+fresh media to rebuild/extend that context after a process restart.

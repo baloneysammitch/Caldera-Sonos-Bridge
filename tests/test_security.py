@@ -379,3 +379,25 @@ async def test_startup_does_not_trust_an_anonymous_or_different_server(config, f
     async with aiohttp.ClientSession() as session:
         with pytest.raises(SecurityError):
             await NetworkPolicy(config).verify_server(session)
+
+
+async def test_soap_debug_logs_never_include_enqueued_credentials(caplog):
+    from calderabridge.soap import build_response
+
+    async def speaker(request):
+        return web.Response(
+            text=build_response("urn:test", "AddURIToQueue", {}), content_type="text/xml"
+        )
+
+    app = web.Application()
+    app.router.add_post("/control", speaker)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        with caplog.at_level("DEBUG", logger="calderabridge.soap"):
+            await SoapClient(session).call(
+                str(server.make_url("/control")),
+                "urn:test",
+                "AddURIToQueue",
+                {"EnqueuedURI": "http://example.invalid/file?X-Plex-Token=synthetic-secret-canary"},
+            )
+    assert "AddURIToQueue" in caplog.text
+    assert "synthetic-secret-canary" not in caplog.text
