@@ -280,6 +280,13 @@ class NetworkPolicy:
         )
         now = time.time()
         if not token:
+            # An image/form/navigation request can carry query parameters but
+            # cannot set this custom header. Do not let a public/nonsecret client
+            # identifier become a browser CSRF credential merely through IP pairing.
+            if not request.headers.get("Origin") and not request.headers.get(
+                "X-Plex-Client-Identifier"
+            ):
+                raise SecurityError("Credentialless native controls require a controller header")
             if request.path.endswith("/playMedia") or self._pairs.get(key, 0) < now:
                 raise SecurityError("Controller must first authenticate with Plex")
             return

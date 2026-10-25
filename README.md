@@ -18,7 +18,9 @@ apps can still change grouping independently of this bridge.
   bridge verifies the server identity and refuses servers that accept an invalid
   token. A controller that successfully authenticates is paired to its source IP
   and client identifier for twelve hours, allowing subsequent credentialless
-  Companion commands used by native clients. Private pairing records survive a
+  Companion commands used by native clients. Those requests must carry a custom
+  controller header or an approved browser Origin, preventing cross-site images
+  and forms from turning a known client identifier into a playback command. Private pairing records survive a
   restart; credentials are never stored in those records.
 - Discovery and timeline reads remain available within explicitly approved
   controller networks. They do not authorize playback. Browser Origins and player

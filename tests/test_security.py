@@ -130,6 +130,12 @@ async def test_native_pairing_preserves_credentialless_pause_and_skip(
         remote="127.0.0.1", path="/player/playback/pause", headers=controller(), query={}
     )
     await policy.authorize(request, None)  # A process restart retains the pair, not a token.
+    request.headers = {}
+    request.query = {"clientIdentifier": "verified-controller"}
+    with pytest.raises(SecurityError):
+        await policy.authorize(request, None)  # Cross-site embedding cannot set a header.
+    request.headers = controller()
+    request.query = {}
     request.remote = "127.0.0.2"
     with pytest.raises(SecurityError):
         await policy.authorize(request, None)
