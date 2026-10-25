@@ -25,6 +25,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ import aiohttp
 from defusedxml import ElementTree as DET
 
 from .config import BRIDGE_NAME, BRIDGE_VERSION, Config
+from .security import limited_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -138,15 +141,14 @@ class PlexIdentity:
             "token": self.token,
             "username": self.username,
         }
-        temp = self.path.with_suffix(".json.tmp")
-        temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temp.replace(self.path)
-        # The token is an account credential; keep it off other users' eyes on a
-        # shared host, best-effort - some config volumes will not take a chmod.
+        self.path.parent.chmod(0o700)
+        descriptor, temporary = tempfile.mkstemp(prefix=".plex-", dir=self.path.parent)
         try:
-            self.path.chmod(0o600)
-        except OSError:  # pragma: no cover - depends on the filesystem
-            pass
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+            Path(temporary).replace(self.path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     def forget(self) -> None:
         self.token = ""
@@ -206,9 +208,9 @@ class PlexAccount:
             headers["X-Plex-Token"] = effective
         try:
             async with self._session.request(
-                method, url, headers=headers, timeout=self._timeout
+                method, url, headers=headers, timeout=self._timeout, allow_redirects=False
             ) as response:
-                raw = await response.text()
+                raw = await limited_text(response)
                 body: object = raw
                 if raw.strip().startswith(("{", "[")):
                     try:
@@ -220,14 +222,16 @@ class PlexAccount:
             raise PlexAuthError(f"plex.tv is not reachable: {exc}") from exc
 
     # -- linking --------------------------------------------------------
-    async def request_pin(self) -> LinkCode:
+    async def request_pin(self, client_id: str = "", name: str = "") -> LinkCode:
         """Claim a PIN for the user to enter at plex.tv/link.
 
         Deliberately *not* a "strong" PIN.  Asking for one gets a long random
         string meant for an app that pastes it programmatically; the box at
         plex.tv/link takes the short four-character kind, and nothing else.
         """
-        status, body = await self._request("POST", f"{PLEX_TV}/api/v2/pins", token="")
+        status, body = await self._request(
+            "POST", f"{PLEX_TV}/api/v2/pins", token="", client_id=client_id, name=name
+        )
         if status not in (200, 201) or not isinstance(body, dict):
             raise PlexAuthError(f"plex.tv would not issue a code (HTTP {status})")
         return LinkCode(
@@ -238,9 +242,7 @@ class PlexAccount:
 
     async def poll_pin(self, pin: LinkCode) -> str | None:
         """Has the code been entered yet?  Returns the token once it has."""
-        status, body = await self._request(
-            "GET", f"{PLEX_TV}/api/v2/pins/{pin.id}", token=""
-        )
+        status, body = await self._request("GET", f"{PLEX_TV}/api/v2/pins/{pin.id}", token="")
         if status == 404:
             raise PlexAuthError("that code expired before it was entered")
         if not isinstance(body, dict):
@@ -303,12 +305,14 @@ class PlexAccount:
         device_id = None
         try:
             status, body = await self._request(
-                "POST", f"{PLEX_TV}/devices.xml", client_id=client_id, name=name
+                "GET", f"{PLEX_TV}/devices.xml", client_id=client_id, name=name
             )
             # The numeric id comes back with the registration itself.  Reading
             # it from the account's resource list instead does not work: that
             # list is keyed by client identifier and need not carry the id at
             # all, which left the address unattached.
+            if status != 200:
+                raise PlexAuthError(f"Device lookup failed (HTTP {status})")
             device_id = device_id_from_xml(body, client_id)
             if device_id is None:
                 device_id = await self._device_id(client_id, name)
@@ -362,9 +366,7 @@ class PlexAccount:
     async def remove_device(self, device_id: str) -> bool:
         """Take one device off the account."""
         try:
-            status, _ = await self._request(
-                "DELETE", f"{PLEX_TV}/devices/{device_id}.xml"
-            )
+            status, _ = await self._request("DELETE", f"{PLEX_TV}/devices/{device_id}.xml")
         except PlexAuthError as exc:
             LOGGER.debug("Could not remove device %s: %s", device_id, exc)
             return False

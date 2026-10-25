@@ -13,8 +13,11 @@ container being replaced on the next image pull.
 
 from __future__ import annotations
 
+import hmac
 import html
 import logging
+import os
+from pathlib import Path
 
 from aiohttp import web
 
@@ -27,10 +30,33 @@ from .speakers import svg as speaker_svg
 LOGGER = logging.getLogger(__name__)
 
 BRIDGE_KEY: web.AppKey = web.AppKey("bridge")
+ADMIN_AUTHORIZED = web.RequestKey("admin_authorized", bool)
 
 
 def create_app(bridge) -> web.Application:
-    app = web.Application()
+    admin_token = ""
+    token_file = getattr(bridge.config, "admin_token_file", "")
+    if token_file:
+        path = Path(token_file)
+        if path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
+            raise ValueError("Admin credential must be private and owned by this process")
+        admin_token = path.read_text().strip()
+        if len(admin_token) < 32:
+            raise ValueError("Admin credential must contain at least 32 characters")
+
+    @web.middleware
+    async def read_only_admin(request, handler):
+        supplied = request.headers.get("Authorization", "")
+        request[ADMIN_AUTHORIZED] = bool(
+            admin_token and hmac.compare_digest(supplied, "Bearer " + admin_token)
+        )
+        if request.path.startswith("/update"):
+            raise web.HTTPNotFound()
+        if request.method not in ("GET", "HEAD") and not request[ADMIN_AUTHORIZED]:
+            raise web.HTTPForbidden(text="Settings are administrator-managed")
+        return await handler(request)
+
+    app = web.Application(middlewares=[read_only_admin])
     app[BRIDGE_KEY] = bridge
 
     app.router.add_get("/", handle_page)
@@ -40,9 +66,6 @@ def create_app(bridge) -> web.Application:
     app.router.add_post("/plex/link", handle_link)
     app.router.add_get("/plex/link", handle_link_status)
     app.router.add_post("/plex/unlink", handle_unlink)
-    app.router.add_get("/update", handle_update_status)
-    app.router.add_post("/update/check", handle_update_check)
-    app.router.add_post("/update", handle_update_install)
     app.router.add_get("/room/{uid}/icon.svg", handle_icon_svg)
     app.router.add_get("/room/{uid}/icon/{size}.png", handle_icon_png)
     return app
@@ -202,11 +225,11 @@ def _plex_cell(status: dict, room: dict) -> str:
     rather than merely not appear.
     """
     if not status["plex"]["linked"]:
-        return '<span class=dim>local network only</span>'
+        return "<span class=dim>local network only</span>"
     if room.get("publishedUri"):
-        return f'<span class=ok>published</span><br><span class=dim>{_esc(room["publishedUri"])}</span>'
+        return f"<span class=ok>published</span><br><span class=dim>{_esc(room['publishedUri'])}</span>"
     return (
-        '<span class=bad>not published</span><br>'
+        "<span class=bad>not published</span><br>"
         "<span class=dim>a phone will not see this room</span>"
     )
 
@@ -225,38 +248,34 @@ def _update_card(status: dict) -> str:
         return (
             "<section class=card id=updates><h2>Updates</h2>"
             + "".join(lines)
-            + '<p class=ok id=updatemsg>Installing. This page will come back on its '
+            + "<p class=ok id=updatemsg>Installing. This page will come back on its "
             "own once the new version is running.</p></section>"
         )
     if update.get("state") == "failed":
-        lines.append(f'<p class=bad>{_esc(update.get("message"))}</p>')
+        lines.append(f"<p class=bad>{_esc(update.get('message'))}</p>")
 
     if not update.get("canInstall"):
         lines.append(
-            f'<p class=note>{_esc(update.get("reason") or "")}</p>'
+            f"<p class=note>{_esc(update.get('reason') or '')}</p>"
             "<p class=note>To let the bridge update itself, add "
             "<code>-v /var/run/docker.sock:/var/run/docker.sock</code> to the "
             "<code>docker run</code> line. That is root on the host, so it is "
             "off unless you ask for it.</p>"
         )
     elif not update.get("checkable"):
-        lines.append(f'<p class=note>{_esc(update.get("reason") or "")}</p>')
+        lines.append(f"<p class=note>{_esc(update.get('reason') or '')}</p>")
     elif update.get("updateAvailable"):
-        lines.append('<p class=ok>A newer image is published.</p>')
+        lines.append("<p class=ok>A newer image is published.</p>")
     elif update.get("lastChecked"):
-        lines.append(
-            f'<p class=dim>Up to date, as of {_esc(update.get("lastChecked"))}.</p>'
-        )
+        lines.append(f"<p class=dim>Up to date, as of {_esc(update.get('lastChecked'))}.</p>")
     if update.get("error"):
-        lines.append(f'<p class=dim>{_esc(update.get("error"))}</p>')
+        lines.append(f"<p class=dim>{_esc(update.get('error'))}</p>")
 
-    buttons = ['<button type=button class=link id=checkbtn>Check now</button>']
+    buttons = ["<button type=button class=link id=checkbtn>Check now</button>"]
     if update.get("canInstall"):
         label = "Install update" if update.get("updateAvailable") else "Reinstall"
-        buttons.insert(
-            0, f'<button type=button class=primary id=updatebtn>{label}</button>'
-        )
-    lines.append(f'<div class=actions>{"".join(buttons)}</div>')
+        buttons.insert(0, f"<button type=button class=primary id=updatebtn>{label}</button>")
+    lines.append(f"<div class=actions>{''.join(buttons)}</div>")
     lines.append('<p class=note id=updatemsg style="display:none"></p>')
     return "<section class=card id=updates><h2>Updates</h2>" + "".join(lines) + "</section>"
 
@@ -300,10 +319,9 @@ def _rooms_table(status: dict) -> str:
             f'<td data-label="Sonos">{_esc(room["sonosIp"])}'
             f"<span class=dim> &middot; port {room['port']}</span></td>"
             f'<td data-label="On Plex">{_plex_cell(status, room)}</td>'
-
             f'<td data-label="Coordinator">{_esc(room["coordinator"])}</td>'
             f'<td data-label="State"><span class="pill {_esc(room["state"])}">'
-            f'{_esc(room["state"])}</span></td>'
+            f"{_esc(room['state'])}</span></td>"
             f'<td data-label="Now playing">{now}</td>'
             f'<td data-label="Volume">{room["volume"]}'
             f"{' (muted)' if room['mute'] else ''}</td>"
@@ -320,7 +338,11 @@ def _rooms_table(status: dict) -> str:
 
 
 def _field(name: str, label: str, control: str, note: str, overridden: bool) -> str:
-    badge = ' <span class=badge title="Set here, not from the environment">saved</span>' if overridden else ""
+    badge = (
+        ' <span class=badge title="Set here, not from the environment">saved</span>'
+        if overridden
+        else ""
+    )
     reset = (
         f'<form method=post action="/settings/reset" class=inline>'
         f'<input type=hidden name=key value="{_esc(name)}">'
@@ -419,7 +441,9 @@ def _settings_form(status: dict) -> str:
             f(
                 "include_zones",
                 "Only these rooms",
-                _text_input("include_zones", ", ".join(settings["include_zones"]), "Kitchen, Study"),
+                _text_input(
+                    "include_zones", ", ".join(settings["include_zones"]), "Kitchen, Study"
+                ),
                 "Comma-separated. Leave empty to publish every room.",
             ),
             f(
@@ -664,9 +688,9 @@ async def handle_page(request: web.Request) -> web.Response:
     if "saved" in request.query:
         count = request.query.get("saved", "0")
         banner = (
-            f'<div class=banner>Saved. {count} setting(s) changed.</div>'
+            f"<div class=banner>Saved. {_esc(count)} setting(s) changed.</div>"
             if count != "0"
-            else '<div class=banner>Saved - nothing needed changing.</div>'
+            else "<div class=banner>Saved - nothing needed changing.</div>"
         )
     elif "reset" in request.query:
         banner = "<div class=banner>Reset to the values from the environment.</div>"
@@ -684,8 +708,8 @@ async def handle_page(request: web.Request) -> web.Response:
 <link rel="icon" href="data:,">
 <style>{STYLE}</style></head><body><main>
 <h1>{_esc(BRIDGE_NAME)} <span style="opacity:.45">v{BRIDGE_VERSION}</span></h1>
-<p class=sub>Publishing {len(status['rooms'])} Sonos room(s) to Plex as players from
-<code>{_esc(status['bridgeIp'])}</code>, in <code>{_esc(status['settings']['mode'])}</code> mode.
+<p class=sub>Publishing {len(status["rooms"])} Sonos room(s) to Plex as players from
+<code>{_esc(status["bridgeIp"])}</code>, in <code>{_esc(status["settings"]["mode"])}</code> mode.
 GDM is {gdm}.</p>
 {banner}
 
@@ -705,14 +729,20 @@ GDM is {gdm}.</p>
 
 <footer>
 Machine-readable status: <a href="/status.json">/status.json</a>.
-Settings are stored in <code>{_esc(status['settingsPath'])}</code>; ports are set
+Settings are stored in <code>{_esc(status["settingsPath"])}</code>; ports are set
 from the environment and need a restart.
 </footer>
 </main><script>{PAGE_SCRIPT}</script></body></html>"""
+    if not request.get(ADMIN_AUTHORIZED):
+        page = page.replace(
+            "<main>",
+            "<main><p class=note>Read-only status. Account linking and settings are managed by the administrator.</p>",
+        )
+        for element in ("button", "input", "select"):
+            page = page.replace("<" + element, "<" + element + " disabled")
     return web.Response(text=page, content_type="text/html")
 
 
 def rooms_html(status: dict) -> str:
     """The rooms table body, for the page's own periodic refresh."""
     return _rooms_table(status)
-

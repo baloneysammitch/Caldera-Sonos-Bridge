@@ -40,7 +40,13 @@ async def household():
 @pytest.fixture
 async def bridge(tmp_path, household, fake_plex):
     config = Config(
+        admin_token_file=str(tmp_path / "test-admin-token"),
         bridge_ip="127.0.0.1",
+        plex_server_address="127.0.0.1",
+        plex_server_port=fake_plex.port,
+        plex_machine_identifier="pms-abc",
+        controller_networks=["127.0.0.1/32"],
+        sonos_devices={"RINCON_AAA01400": "127.0.0.1", "RINCON_CCC01400": "127.0.0.1"},
         settings_port=SETTINGS_PORT,
         player_port_base=PLAYER_BASE,
         config_dir=str(tmp_path),
@@ -52,6 +58,8 @@ async def bridge(tmp_path, household, fake_plex):
         topology_interval=3600.0,
         poll_interval=3600.0,
     )
+    (tmp_path / "test-admin-token").write_text("test-only-admin-token-32-characters")
+    (tmp_path / "test-admin-token").chmod(0o600)
     bridge = Bridge(config)
     await bridge.start()
     yield bridge
@@ -84,7 +92,13 @@ async def test_each_room_answers_on_its_own_port(bridge):
     ports = sorted(player.port for player in bridge.players.values())
     assert ports == [PLAYER_BASE, PLAYER_BASE + 1]
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         for player in bridge.players.values():
             async with session.get(f"http://127.0.0.1:{player.port}/resources") as response:
                 assert response.status == 200
@@ -109,7 +123,13 @@ async def test_ports_are_remembered_across_a_restart(bridge, tmp_path):
 async def test_playing_to_a_room_loads_the_sonos_queue(bridge, household, fake_plex):
     kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         url = f"http://127.0.0.1:{kitchen.port}/player/playback/playMedia"
         async with session.get(url, params=play_params(fake_plex)) as response:
             assert response.status == 200
@@ -128,7 +148,13 @@ async def test_playing_to_a_room_loads_the_sonos_queue(bridge, household, fake_p
 async def test_the_timeline_reports_what_is_playing(bridge, fake_plex):
     kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         base = f"http://127.0.0.1:{kitchen.port}"
         async with session.get(
             f"{base}/player/playback/playMedia", params=play_params(fake_plex)
@@ -149,10 +175,14 @@ async def test_transport_control_reaches_the_speaker(bridge, household, fake_ple
     kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
     base = f"http://127.0.0.1:{kitchen.port}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{base}/player/playback/playMedia", params=play_params(fake_plex)
-        ):
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
+        async with session.get(f"{base}/player/playback/playMedia", params=play_params(fake_plex)):
             pass
         async with session.get(f"{base}/player/playback/pause"):
             pass
@@ -162,9 +192,7 @@ async def test_transport_control_reaches_the_speaker(bridge, household, fake_ple
             pass
         assert household.player.track_index == 2
 
-        async with session.get(
-            f"{base}/player/playback/setParameters", params={"volume": "42"}
-        ):
+        async with session.get(f"{base}/player/playback/setParameters", params={"volume": "42"}):
             pass
         assert household.player.volume == 42
 
@@ -172,7 +200,13 @@ async def test_transport_control_reaches_the_speaker(bridge, household, fake_ple
 async def test_progress_is_reported_back_to_plex(bridge, fake_plex):
     kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         async with session.get(
             f"http://127.0.0.1:{kitchen.port}/player/playback/playMedia",
             params=play_params(fake_plex),
@@ -188,7 +222,13 @@ async def test_progress_is_reported_back_to_plex(bridge, fake_plex):
 # The settings page
 # ----------------------------------------------------------------------
 async def test_the_settings_page_is_served(bridge):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         async with session.get(f"http://127.0.0.1:{SETTINGS_PORT}/") as response:
             assert response.status == 200
             body = await response.text()
@@ -199,7 +239,13 @@ async def test_the_settings_page_is_served(bridge):
 
 
 async def test_status_json_lists_the_rooms(bridge):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         async with session.get(f"http://127.0.0.1:{SETTINGS_PORT}/status.json") as response:
             status = await response.json()
 
@@ -208,7 +254,13 @@ async def test_status_json_lists_the_rooms(bridge):
 
 
 async def test_a_zone_filter_saved_on_the_page_takes_effect_at_once(bridge):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         async with session.post(
             f"http://127.0.0.1:{SETTINGS_PORT}/settings",
             json={"exclude_zones": "Study"},
@@ -219,7 +271,13 @@ async def test_a_zone_filter_saved_on_the_page_takes_effect_at_once(bridge):
     assert sorted(p.zone.name for p in bridge.players.values()) == ["Kitchen"]
 
     # The room's player is gone from the network too, not just from the list.
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         with pytest.raises(aiohttp.ClientError):
             async with session.get(
                 f"http://127.0.0.1:{PLAYER_BASE + 1}/resources",
@@ -229,7 +287,13 @@ async def test_a_zone_filter_saved_on_the_page_takes_effect_at_once(bridge):
 
 
 async def test_a_setting_saved_on_the_page_survives_a_restart(bridge, tmp_path):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        headers={
+            "X-Plex-Client-Identifier": "integration-controller",
+            "X-Plex-Token": "tok-123",
+            "Authorization": "Bearer test-only-admin-token-32-characters",
+        }
+    ) as session:
         async with session.post(
             f"http://127.0.0.1:{SETTINGS_PORT}/settings", json={"name_suffix": " (Plex)"}
         ) as response:
@@ -258,7 +322,13 @@ async def test_a_room_moves_along_when_its_port_is_taken(tmp_path, household, fa
     squatter.listen(1)
 
     config = Config(
+        admin_token_file=str(tmp_path / "test-admin-token"),
         bridge_ip="127.0.0.1",
+        plex_server_address="127.0.0.1",
+        plex_server_port=fake_plex.port,
+        plex_machine_identifier="pms-abc",
+        controller_networks=["127.0.0.1/32"],
+        sonos_devices={"RINCON_AAA01400": "127.0.0.1", "RINCON_CCC01400": "127.0.0.1"},
         settings_port=SETTINGS_PORT,
         player_port_base=PLAYER_BASE,
         config_dir=str(tmp_path),
@@ -268,6 +338,8 @@ async def test_a_room_moves_along_when_its_port_is_taken(tmp_path, household, fa
         topology_interval=3600.0,
         poll_interval=3600.0,
     )
+    (tmp_path / "test-admin-token").write_text("test-only-admin-token-32-characters")
+    (tmp_path / "test-admin-token").chmod(0o600)
     bridge = Bridge(config)
     await bridge.start()
     try:
@@ -277,11 +349,15 @@ async def test_a_room_moves_along_when_its_port_is_taken(tmp_path, household, fa
         assert PLAYER_BASE not in ports
 
         # And each one really is listening where it says it is.
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            headers={
+                "X-Plex-Client-Identifier": "integration-controller",
+                "X-Plex-Token": "tok-123",
+                "Authorization": "Bearer test-only-admin-token-32-characters",
+            }
+        ) as session:
             for player in bridge.players.values():
-                async with session.get(
-                    f"http://127.0.0.1:{player.port}/resources"
-                ) as response:
+                async with session.get(f"http://127.0.0.1:{player.port}/resources") as response:
                     assert response.status == 200
     finally:
         await bridge.stop()
@@ -298,7 +374,13 @@ async def test_a_busy_port_is_only_discovered_once(tmp_path, household, fake_ple
     squatter.listen(1)
 
     config = Config(
+        admin_token_file=str(tmp_path / "test-admin-token"),
         bridge_ip="127.0.0.1",
+        plex_server_address="127.0.0.1",
+        plex_server_port=fake_plex.port,
+        plex_machine_identifier="pms-abc",
+        controller_networks=["127.0.0.1/32"],
+        sonos_devices={"RINCON_AAA01400": "127.0.0.1", "RINCON_CCC01400": "127.0.0.1"},
         settings_port=SETTINGS_PORT,
         player_port_base=PLAYER_BASE,
         config_dir=str(tmp_path),
@@ -308,6 +390,8 @@ async def test_a_busy_port_is_only_discovered_once(tmp_path, household, fake_ple
         topology_interval=3600.0,
         poll_interval=3600.0,
     )
+    (tmp_path / "test-admin-token").write_text("test-only-admin-token-32-characters")
+    (tmp_path / "test-admin-token").chmod(0o600)
     bridge = Bridge(config)
     with caplog.at_level(logging.INFO, logger="calderabridge.bridge"):
         await bridge.start()
@@ -331,3 +415,47 @@ async def test_plex_own_ports_are_stepped_over_without_trying_them(tmp_path, hou
     # being handed out and discovered busy.
     assert allocator.port_for("room-a") == 32601
     assert allocator.port_for("room-b") == 32602
+
+
+@pytest.mark.parametrize("coordinator", ["{uid}", "{uid2}"])
+async def test_grouped_room_rejects_mutation_before_soap(
+    bridge, household, monkeypatch, coordinator
+):
+    # Change the actual device's next topology response, rather than stubbing
+    # the player's decision. A stale, formerly standalone view must not pass.
+    state = (
+        '<ZoneGroupState><ZoneGroups><ZoneGroup Coordinator="' + coordinator + '">'
+        '<ZoneGroupMember UUID="{uid}" ZoneName="{room}" Location="http://127.0.0.1:1400/xml/device_description.xml"/>'
+        '<ZoneGroupMember UUID="{uid2}" ZoneName="{room2}" Location="http://127.0.0.1:1400/xml/device_description.xml"/>'
+        "</ZoneGroup></ZoneGroups></ZoneGroupState>"
+    )
+    monkeypatch.setattr("tests.fake_device.ZONE_GROUP_STATE", state)
+    kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
+    household.player.calls.clear()
+    async with aiohttp.ClientSession(
+        headers={"X-Plex-Client-Identifier": "integration-controller", "X-Plex-Token": "tok-123"}
+    ) as session:
+        async with session.get(
+            f"http://127.0.0.1:{kitchen.port}/player/playback/pause"
+        ) as response:
+            assert response.status == 403
+    assert "Pause" not in household.player.actions()
+
+
+async def test_failed_fresh_topology_cannot_reuse_a_recent_success(bridge, household, monkeypatch):
+    state = (
+        '<ZoneGroupState><ZoneGroups><ZoneGroup Coordinator="{uid}">'
+        '<ZoneGroupMember UUID="{uid}" ZoneName="{room}" Location="http://192.0.2.99:1400/xml/device_description.xml"/>'
+        "</ZoneGroup></ZoneGroups></ZoneGroupState>"
+    )
+    monkeypatch.setattr("tests.fake_device.ZONE_GROUP_STATE", state)
+    kitchen = next(p for p in bridge.players.values() if p.zone.name == "Kitchen")
+    household.player.calls.clear()
+    async with aiohttp.ClientSession(
+        headers={"X-Plex-Client-Identifier": "integration-controller", "X-Plex-Token": "tok-123"}
+    ) as session:
+        async with session.get(
+            f"http://127.0.0.1:{kitchen.port}/player/playback/pause"
+        ) as response:
+            assert response.status == 403
+    assert "Pause" not in household.player.actions()

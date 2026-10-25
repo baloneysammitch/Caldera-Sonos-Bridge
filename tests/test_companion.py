@@ -27,7 +27,14 @@ async def subscribers():
 @pytest.fixture
 async def client(player, subscribers):
     server = TestServer(create_app(player, subscribers))
-    async with TestClient(server) as client:
+    async with TestClient(
+        server,
+        headers={
+            "X-Plex-Client-Identifier": "test-controller",
+            "X-Plex-Token": "tok-123",
+            "Origin": "https://approved.example",
+        },
+    ) as client:
         yield client
 
 
@@ -52,7 +59,7 @@ async def test_responses_carry_the_plex_headers(client, player):
     assert response.headers["X-Plex-Client-Identifier"] == player.machine_identifier
     assert response.headers["X-Plex-Protocol"] == "1.0"
     # Plex Web is a browser, so it needs these.
-    assert response.headers["Access-Control-Allow-Origin"] == "*"
+    assert response.headers["Access-Control-Allow-Origin"] == "https://approved.example"
 
 
 async def test_resources_xml_escapes_a_troublesome_name(player):
@@ -103,8 +110,7 @@ async def test_subscribe_pushes_a_timeline_straight_away(client, player):
 
     try:
         response = await client.get(
-            f"/player/timeline/subscribe?port={listener_server.port}"
-            "&protocol=http&commandID=1"
+            f"/player/timeline/subscribe?port={listener_server.port}&protocol=http&commandID=1"
         )
         assert response.status == 200
         for _ in range(50):
@@ -131,7 +137,7 @@ async def test_subscribe_without_a_port_is_rejected(client):
 
 
 async def test_an_unreachable_subscriber_is_dropped(subscribers):
-    subscribers.add("127.0.0.1", 9, "http", "ghost")
+    subscribers.add("127.0.0.1", 65534, "http", "ghost")
     for _ in range(TimelineSubscribers.MAX_FAILURES):
         await subscribers.publish("<MediaContainer/>", "1")
     assert len(subscribers) == 0

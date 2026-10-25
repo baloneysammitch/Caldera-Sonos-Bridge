@@ -229,6 +229,8 @@ class FakePlex:
 
     def __init__(self, tracks: int = 3, **track_kwargs) -> None:
         self.tracks = tracks
+        self.machine_identifier = "pms-abc"
+        self.requires_auth = True
         self.track_kwargs = track_kwargs
         self.timelines: list[dict[str, str]] = []
         self.requests: list[str] = []
@@ -244,6 +246,8 @@ class FakePlex:
 
     async def start(self) -> None:
         app = web.Application()
+        app.router.add_get("/identity", self._identity)
+        app.router.add_get("/library/sections", self._sections)
         app.router.add_get("/servers", self._servers)
         app.router.add_get("/playQueues/{pq}", self._play_queue)
         app.router.add_get("/library/metadata/{key}", self._metadata)
@@ -269,6 +273,17 @@ class FakePlex:
             protocol="http",
             token=token,
         )
+
+    async def _identity(self, request):
+        return web.Response(
+            text=f'<MediaContainer machineIdentifier="{self.machine_identifier}"/>',
+            content_type="text/xml",
+        )
+
+    async def _sections(self, request):
+        if self.requires_auth and request.headers.get("X-Plex-Token") != "tok-123":
+            return web.Response(status=401)
+        return web.Response(text="<MediaContainer/>", content_type="text/xml")
 
     async def _servers(self, request: web.Request) -> web.Response:
         """The server describing its own addresses, as PMS does."""
@@ -322,9 +337,7 @@ class FakePlex:
             return web.Response(status=500, text="no transcoder")
         # The output format is named by the profile the client declares, not
         # by the path - which is how a real universal transcode works.
-        lossless = "container=flac" in request.query.get(
-            "X-Plex-Client-Profile-Extra", ""
-        )
+        lossless = "container=flac" in request.query.get("X-Plex-Client-Profile-Extra", "")
         kind = "audio/flac" if lossless else "audio/mpeg"
         return web.Response(body=b"\x00\x01audio", content_type=kind)
 
@@ -333,8 +346,7 @@ class FakePlex:
         return [
             r
             for r in self.requests
-            if "/audio/:/transcode/universal/start" in r
-            and f"container%3D{container}" in r
+            if "/audio/:/transcode/universal/start" in r and f"container%3D{container}" in r
         ]
 
 
@@ -353,8 +365,23 @@ def zone() -> ZoneInfo:
 
 
 @pytest.fixture
-def config(tmp_path) -> Config:
-    return Config(name_suffix=" (Sonos)", mode="queue", config_dir=str(tmp_path))
+def config(tmp_path, fake_plex) -> Config:
+    admin_file = tmp_path / "test-admin-token"
+    admin_file.write_text("test-only-admin-token-32-characters")
+    admin_file.chmod(0o600)
+    return Config(
+        name_suffix=" (Sonos)",
+        mode="queue",
+        config_dir=str(tmp_path),
+        admin_token_file=str(admin_file),
+        bridge_ip="127.0.0.1",
+        plex_server_address="127.0.0.1",
+        plex_server_port=fake_plex.port,
+        plex_machine_identifier="pms-abc",
+        controller_networks=["127.0.0.1/32"],
+        allowed_origins=["https://approved.example"],
+        sonos_devices={"RINCON_AAA01400": "192.168.1.10"},
+    )
 
 
 @pytest.fixture

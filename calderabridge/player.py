@@ -39,7 +39,9 @@ QUEUE_WINDOW = 12
 QUEUE_REFILL_AT = 6
 
 #: What the bridge tells Plex it can be asked to do.
-CONTROLLABLE = "playPause,stop,skipPrevious,skipNext,stepBack,stepForward,seekTo,volume,shuffle,repeat"
+CONTROLLABLE = (
+    "playPause,stop,skipPrevious,skipNext,stepBack,stepForward,seekTo,volume,shuffle,repeat"
+)
 
 STATE_PLAYING = "playing"
 STATE_PAUSED = "paused"
@@ -84,6 +86,13 @@ class RoomPlayer:
         self._topology = topology
         self._soap = soap_client
         self._plex = plex
+        from .security import NetworkPolicy
+
+        if plex.policy is None:
+            plex.policy = NetworkPolicy(config)
+        self.policy = plex.policy
+        if hasattr(soap_client, "mutation_guard"):
+            soap_client.mutation_guard = self._guard_speaker
 
         self.machine_identifier = config.machine_identifier(zone.uid)
         self.server = PlexServer()
@@ -163,6 +172,19 @@ class RoomPlayer:
         """Adopt refreshed topology - a new address, a rename, a regrouping."""
         self.zone = zone
 
+    async def _guard_speaker(self, url):
+        await self.policy.check_group(self._topology, self.zone.uid)
+        if self.policy.devices.get(self.zone.uid) != self.zone.ip:
+            from .security import SecurityError
+
+            raise SecurityError("Speaker identity/address binding changed")
+        from urllib.parse import urlsplit
+
+        if urlsplit(url).hostname != self.zone.ip:
+            from .security import SecurityError
+
+            raise SecurityError("Mutation would affect a different room")
+
     # -- Sonos handles --------------------------------------------------
     def player(self) -> SonosPlayer:
         """The room itself.  Volume and mute belong here."""
@@ -208,7 +230,12 @@ class RoomPlayer:
             self._wake()
             return
 
+        server = self.policy.canonical_server(server)
         container_key = params.get("containerKey", "")
+        if container_key:
+            self.policy.validate_media_key(container_key, queue=True)
+        if params.get("key"):
+            self.policy.validate_media_key(params["key"])
         item_key = params.get("key", "")
         offset_ms = int(params.get("offset") or 0)
 
@@ -229,9 +256,7 @@ class RoomPlayer:
                     self.zone.name,
                     item_key,
                 )
-                self.queue = await self._plex.metadata(
-                    server, item_key, self.machine_identifier
-                )
+                self.queue = await self._plex.metadata(server, item_key, self.machine_identifier)
             if not self.queue.tracks:
                 detail = self._plex.last_error or "it returned nothing playable"
                 self.last_error = f"Could not read that from Plex: {detail}"
@@ -324,17 +349,13 @@ class RoomPlayer:
         async with self._lock:
             index = self.queue.index_of(item_id) if item_id else -1
             if index < 0 and key:
-                index = next(
-                    (i for i, t in enumerate(self.queue.tracks) if t.key == key), -1
-                )
+                index = next((i for i, t in enumerate(self.queue.tracks) if t.key == key), -1)
             if index < 0:
                 return
             # Already in the Sonos queue?  Then it is a seek, not a reload.
             loaded_at = index - self._queue_offset
             if 0 <= loaded_at < len(self._loaded):
-                await self._transport(
-                    lambda p: p.seek("TRACK_NR", str(loaded_at + 1))
-                )
+                await self._transport(lambda p: p.seek("TRACK_NR", str(loaded_at + 1)))
                 await self._transport(lambda p: p.play())
                 self.state = STATE_PLAYING
             else:
@@ -624,7 +645,7 @@ class RoomPlayer:
         location = "fullScreenMusic" if self.state != STATE_STOPPED else "navigation"
         return (
             '<?xml version="1.0" encoding="utf-8"?>\n'
-            f'<MediaContainer commandID="{command}" location="{location}"'
+            f'<MediaContainer commandID={quoteattr(str(command))} location="{location}"'
             f" machineIdentifier={quoteattr(self.machine_identifier)}>"
             f"{music}{idle}</MediaContainer>"
         )

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import aiohttp
 from defusedxml import ElementTree as DET
 
+from .security import limited_text
 from .soap import SoapClient, UPnPError
 from .speakers import DEFAULT_KIND, classify
 
@@ -362,9 +363,9 @@ async def fetch_device_description(
 ) -> DeviceDescription:
     """Download and parse a Sonos device description document."""
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout), allow_redirects=False) as response:
             if response.status != 200:
                 raise UPnPError(501, f"HTTP {response.status} fetching {url}")
-            return parse_device_description(await response.text())
+            return parse_device_description(await limited_text(response))
     except aiohttp.ClientError as exc:
         raise UPnPError(501, f"{exc}") from exc

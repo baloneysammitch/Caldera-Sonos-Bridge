@@ -30,6 +30,7 @@ from .net import local_ip_towards
 from .player import RoomPlayer
 from .plexapi import PlexClient
 from .plexauth import LinkCode, PlexAccount, PlexAuthError, PlexIdentity
+from .security import NetworkPolicy
 from .soap import SoapClient
 from .sonos import ZoneInfo
 from .updates import OLD_SUFFIX, UpdateError, Updater
@@ -78,9 +79,7 @@ class PortAllocator:
             return
         if isinstance(saved, dict):
             self._ports = {
-                str(uid): int(port)
-                for uid, port in saved.items()
-                if str(port).isdigit()
+                str(uid): int(port) for uid, port in saved.items() if str(port).isdigit()
             }
 
     def _save(self) -> None:
@@ -123,6 +122,7 @@ class Bridge:
 
     def __init__(self, config: Config) -> None:
         self.config = config
+        self.policy = NetworkPolicy(config)
         self.settings = SettingsStore(config)
         self.bridge_ip = config.bridge_ip or local_ip_towards()
 
@@ -167,20 +167,20 @@ class Bridge:
     # Lifecycle
     # ------------------------------------------------------------------
     async def start(self) -> None:
+        self.policy.require_config()
         connector = aiohttp.TCPConnector(limit=64, force_close=True, enable_cleanup_closed=True)
         self._session = aiohttp.ClientSession(connector=connector)
+        await self.policy.verify_server(self._session)
         self.account = PlexAccount(self.identity, self._session)
         self.plex = PlexClient(
-            self._session, self.config.http_timeout, self.config.verify_ssl
+            self._session, self.config.http_timeout, self.config.verify_ssl, self.policy
         )
 
-        self.updater = Updater(self._session)
-        await self._tidy_superseded()
+        # Fork updates are administrator-controlled immutable image replacements.
+        self.updater = None
 
-        soap_client = SoapClient(self._session, self.config.http_timeout)
-        self._topology = TopologyManager(
-            self.config, self._session, soap_client, self.bridge_ip
-        )
+        soap_client = SoapClient(self._session, self.config.http_timeout, self.policy)
+        self._topology = TopologyManager(self.config, self._session, soap_client, self.bridge_ip)
         self._topology.set_callback(self._on_zones_changed)
 
         if self.config.player_port_base in PLEX_PORTS:
@@ -233,11 +233,9 @@ class Bridge:
     async def _start_settings_site(self) -> None:
         runner = web.AppRunner(settings_web.create_app(self), access_log=None)
         await runner.setup()
-        await web.TCPSite(runner, "0.0.0.0", self.config.settings_port).start()
+        await web.TCPSite(runner, self.config.settings_bind, self.config.settings_port).start()
         self._settings_runner = runner
-        LOGGER.info(
-            "Settings page on http://%s:%d/", self.bridge_ip, self.config.settings_port
-        )
+        LOGGER.info("Settings page on http://%s:%d/", self.bridge_ip, self.config.settings_port)
 
     async def _start_gdm(self) -> None:
         if not self.config.gdm_enabled:
@@ -311,12 +309,14 @@ class Bridge:
             await self._add_room(zone)
 
     async def _add_room(self, zone: ZoneInfo) -> None:
+        if not self.policy.zone_allowed(zone):
+            return
         port = self._ports.port_for(zone.uid)
         player = RoomPlayer(
             self.config,
             zone,
             self._topology,
-            SoapClient(self._session, self.config.http_timeout),
+            SoapClient(self._session, self.config.http_timeout, self.policy),
             self.plex,
             port,
         )
@@ -351,15 +351,14 @@ class Bridge:
             runner = web.AppRunner(create_player_app(player, subscribers), access_log=None)
             try:
                 await runner.setup()
-                await web.TCPSite(runner, "0.0.0.0", player.port).start()
+                await web.TCPSite(runner, self.bridge_ip, player.port).start()
                 return runner
             except OSError as exc:
                 with contextlib.suppress(Exception):
                     await runner.cleanup()
                 if getattr(exc, "errno", None) not in (48, 98):  # EADDRINUSE
                     LOGGER.error(
-                        "Could not give %s a player on port %d (%s); the room is "
-                        "skipped",
+                        "Could not give %s a player on port %d (%s); the room is skipped",
                         player.zone.name,
                         player.port,
                         exc,
@@ -475,7 +474,13 @@ class Bridge:
     # ------------------------------------------------------------------
     async def update_status(self) -> dict[str, object]:
         if self.updater is None:
-            return {"canInstall": False, "state": "starting"}
+            return {
+                "canInstall": False,
+                "checkable": False,
+                "state": "disabled",
+                "version": BRIDGE_VERSION,
+                "reason": "Self-updates are disabled; use a reviewed image.",
+            }
         status = await self.updater.status()
         status.update(self._update_state)
         status["autoUpdate"] = self.config.auto_update

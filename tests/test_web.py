@@ -112,7 +112,7 @@ def bridge(config, player):
 
 @pytest.fixture
 async def client(bridge):
-    async with TestClient(TestServer(create_app(bridge))) as client:
+    async with TestClient(TestServer(create_app(bridge)), headers={"Authorization": "Bearer test-only-admin-token-32-characters"}) as client:
         yield client
 
 
@@ -345,75 +345,7 @@ async def test_the_empty_state_is_not_given_a_stray_label(client, config):
 
 
 # ----------------------------------------------------------------------
-# Updates
-# ----------------------------------------------------------------------
-async def test_the_page_shows_the_running_version_and_image(client):
-    body = await (await client.get("/")).text()
-    assert "v0.1.11" in body
-    assert "ghcr.io/meltface-80/caldera-sonos-bridge:latest" in body
-    assert "Check now" in body
-
-
-async def test_an_available_update_offers_to_install_it(client, bridge):
-    bridge.update["updateAvailable"] = True
-    body = await (await client.get("/")).text()
-    assert "A newer image is published" in body
-    assert "Install update" in body
-
-
-async def test_without_the_socket_the_page_says_what_to_add(client, bridge):
-    bridge.update["canInstall"] = False
-    bridge.update["reason"] = "The Docker socket is not mounted."
-    body = await (await client.get("/")).text()
-
-    assert "not mounted" in body
-    assert "/var/run/docker.sock" in body
-    # Nothing to press: it cannot install, and saying otherwise would be a lie.
-    assert "id=updatebtn" not in body
-
-
-async def test_a_locally_built_image_explains_itself(client, bridge):
-    bridge.update["checkable"] = False
-    bridge.update["reason"] = "built on this machine rather than pulled"
-    body = await (await client.get("/")).text()
-    assert "built on this machine" in body
-
-
-async def test_update_status_endpoint(client):
-    status = await (await client.get("/update")).json()
-    assert status["version"] == "0.1.11"
-
-
-async def test_checking_for_an_update(client, bridge):
-    response = await client.post("/update/check")
-    assert response.status == 200
-    assert bridge.checked is True
-
-
-async def test_installing_returns_before_the_work_starts(client, bridge):
-    # The answer has to be on its way before the bridge gives up this port.
-    response = await client.post("/update")
-    assert response.status == 200
-    assert (await response.json())["started"] is True
-    assert bridge.updating is True
-
-
-async def test_an_update_that_cannot_start_says_why(client, bridge):
-    bridge.update_error = "the Docker socket is not mounted"
-    response = await client.post("/update")
-    assert response.status == 409
-    assert "socket" in (await response.json())["error"]
-
-
-async def test_auto_update_is_a_saveable_setting(client, config):
-    await client.post(
-        "/settings",
-        data={"_present_auto_update": "1", "auto_update": "on"},
-        allow_redirects=False,
-    )
-    assert config.auto_update is True
-
-    await client.post(
-        "/settings", data={"_present_auto_update": "1"}, allow_redirects=False
-    )
-    assert config.auto_update is False
+# Self-updates are no longer a network API in the maintained fork.
+@pytest.mark.parametrize("method,path", [("get", "/update"), ("post", "/update"), ("post", "/update/check")])
+async def test_self_update_routes_are_absent(client, method, path):
+    assert (await getattr(client, method)(path)).status == 404

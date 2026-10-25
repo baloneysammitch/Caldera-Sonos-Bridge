@@ -21,6 +21,7 @@ import aiohttp
 from defusedxml import ElementTree as DET
 
 from .config import BRIDGE_VERSION
+from .security import limited_text
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,8 +31,18 @@ PLEX_PRODUCT = "Caldera Sonos Bridge"
 #: Containers Sonos plays from an HTTP URL without help.  Anything outside this
 #: set has to be transcoded on the way out or the speaker will refuse it.
 SONOS_NATIVE_CONTAINERS = {
-    "mp3", "flac", "alac", "wav", "wave", "aiff", "aif",
-    "m4a", "mp4", "aac", "ogg", "oga",
+    "mp3",
+    "flac",
+    "alac",
+    "wav",
+    "wave",
+    "aiff",
+    "aif",
+    "m4a",
+    "mp4",
+    "aac",
+    "ogg",
+    "oga",
 }
 
 #: Sonos S2 hardware tops out at 24-bit/48 kHz.  Within that ceiling - 16/44.1,
@@ -442,8 +453,10 @@ class PlexClient:
         session: aiohttp.ClientSession,
         timeout: float = 10.0,
         verify_ssl: bool = True,
+        policy=None,
     ) -> None:
         self._session = session
+        self.policy = policy
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         # None leaves aiohttp's own verification in place; False turns it off,
         # and only for the media server - plex.tv stays verified either way.
@@ -462,6 +475,8 @@ class PlexClient:
         is kept as the fallback, for a server that insists on secure
         connections.
         """
+        if self.policy:
+            return self.policy.canonical_server(server)
         if not server.usable:
             return server
         direct = server.direct
@@ -535,24 +550,33 @@ class PlexClient:
 
     async def reachable(self, server: PlexServer) -> bool:
         """Does this server answer at all?  ``/identity`` needs no token."""
+        if self.policy:
+            self.policy.validate_plex_url(server.url("/identity"))
         try:
             async with self._session.get(
                 server.url("/identity"),
                 ssl=self._ssl,
                 timeout=aiohttp.ClientTimeout(total=5.0),
+                allow_redirects=False,
             ) as response:
-                return response.status < 500
+                return response.status == 200
         except (TimeoutError, aiohttp.ClientError, OSError) as exc:
             LOGGER.debug("Plex did not answer at %s: %s", server.base_url, exc)
             return False
 
     async def _get(self, url: str, headers: dict[str, str] | None = None) -> str | None:
         self.last_error = ""
+        if self.policy:
+            self.policy.validate_plex_url(url)
         try:
             async with self._session.get(
-                url, headers=headers or {}, ssl=self._ssl, timeout=self._timeout
+                url,
+                headers=headers or {},
+                ssl=self._ssl,
+                timeout=self._timeout,
+                allow_redirects=False,
             ) as response:
-                body = await response.text()
+                body = await limited_text(response)
                 if response.status != 200:
                     # Worth saying out loud rather than at debug: a 401 here is
                     # an expired token and a 404 a queue the server has already
@@ -562,7 +586,7 @@ class PlexClient:
                         "%s for %s: %s",
                         self.last_error,
                         _loggable_url(url),
-                        body.strip()[:200] or "(no body)",
+                        "(response body withheld)",
                     )
                     return None
                 return body
@@ -592,9 +616,7 @@ class PlexClient:
             return PlayQueue()
         return parse_play_queue(body)
 
-    async def metadata(
-        self, server: PlexServer, key: str, client_id: str = ""
-    ) -> PlayQueue:
+    async def metadata(self, server: PlexServer, key: str, client_id: str = "") -> PlayQueue:
         """One library item, read directly, as a queue of its own.
 
         The fallback for when a play queue cannot be read - an expired queue, a

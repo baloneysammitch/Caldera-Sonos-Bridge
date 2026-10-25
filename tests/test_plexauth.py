@@ -35,7 +35,7 @@ class FakePlexTv:
         app.router.add_get("/api/v2/pins/{pin}", self._pin_status)
         app.router.add_get("/api/v2/user", self._user)
         app.router.add_get("/api/v2/resources", self._resources)
-        app.router.add_post("/devices.xml", self._register)
+        app.router.add_get("/devices.xml", self._register)
         app.router.add_put("/devices/{id}", self._publish)
         app.router.add_delete("/devices/{id}.xml", self._delete)
         self._server = TestServer(app)
@@ -226,7 +226,7 @@ async def test_an_unreachable_plex_tv_does_not_unlink(account, monkeypatch):
 # ----------------------------------------------------------------------
 # Publishing rooms
 # ----------------------------------------------------------------------
-async def test_publishing_a_room_registers_it_and_its_address(account, plex_tv):
+async def test_publishing_a_pin_registered_room_updates_its_address(account, plex_tv):
     account.identity.token = "tok-999"
 
     assert await account.publish("room-1", "Kitchen (Sonos)", "http://192.168.1.2:32600")

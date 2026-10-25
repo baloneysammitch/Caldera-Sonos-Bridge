@@ -13,6 +13,7 @@ import aiohttp
 
 from .config import Config
 from .net import SSDP_ADDR, SSDP_PORT, host_from_url, make_search_socket, parse_headers
+from .security import NetworkPolicy
 from .soap import SoapClient, UPnPError
 from .sonos import (
     DEVICE_DESCRIPTION_PATH,
@@ -97,6 +98,7 @@ class TopologyManager:
         bind_ip: str,
     ) -> None:
         self.config = config
+        self.policy = NetworkPolicy(config)
         self._session = session
         self._soap = soap_client
         self._bind_ip = bind_ip
@@ -106,6 +108,7 @@ class TopologyManager:
         self._seed_hosts: list[str] = list(config.static_hosts)
         self._on_change: ZoneCallback | None = None
         self.last_refresh: float = 0.0
+        self.last_refresh_ok = False
         self._lock = asyncio.Lock()
 
     def set_callback(self, callback: ZoneCallback) -> None:
@@ -129,6 +132,8 @@ class TopologyManager:
 
     @property
     def hosts(self) -> list[str]:
+        if self.policy.devices:
+            return list(dict.fromkeys(self.policy.devices.values()))
         seen: dict[str, None] = {}
         for zone in self._all_zones.values():
             if zone.ip:
@@ -140,6 +145,8 @@ class TopologyManager:
     # ------------------------------------------------------------------
     async def discover(self) -> None:
         """Look for any Sonos player on the LAN and remember where it lives."""
+        if self.policy.devices:
+            return  # Configured devices, not unsigned multicast, define trust.
         try:
             responses = await msearch(
                 self._bind_ip,
@@ -178,11 +185,14 @@ class TopologyManager:
     async def refresh(self) -> bool:
         """Re-read the household topology.  Returns True when something changed."""
         async with self._lock:
+            self.last_refresh_ok = False
             state_xml = await self._fetch_topology()
             if state_xml is None:
                 return False
 
             zones = parse_zone_group_state(state_xml)
+            if any(z.uid in self.policy.devices and not self.policy.zone_allowed(z) for z in zones):
+                return False
             if not zones:
                 return False
 
@@ -193,12 +203,15 @@ class TopologyManager:
             playable = {
                 zone.uid: zone
                 for zone in zones
-                if zone.playable and self.config.zone_allowed(zone.name)
+                if zone.playable
+                and self.config.zone_allowed(zone.name)
+                and self.policy.zone_allowed(zone)
             }
             added = [uid for uid in playable if uid not in self.zones]
             removed = [uid for uid in self.zones if uid not in playable]
             self.zones = playable
             self.last_refresh = time.monotonic()
+            self.last_refresh_ok = True
 
         await self._load_models([playable[uid] for uid in added])
 
@@ -227,6 +240,7 @@ class TopologyManager:
             if not zone.ip or zone.uid in self._models:
                 continue
             url = f"http://{zone.ip}:{SONOS_PORT}{DEVICE_DESCRIPTION_PATH}"
+            self.policy.validate_sonos_url(url)
             try:
                 description = await fetch_device_description(
                     self._session, url, self.config.http_timeout

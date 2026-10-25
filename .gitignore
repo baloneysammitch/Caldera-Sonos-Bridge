@@ -6,3 +6,12 @@ venv/
 *.egg-info/
 .coverage
 .ruff_cache/
+
+# Private runtime configuration never belongs in a public fork.
+.env
+.env.*
+!.env.example
+/plex.json
+/controllers.json
+/settings.json
+/ports.json

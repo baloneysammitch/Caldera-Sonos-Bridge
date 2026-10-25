@@ -11,13 +11,15 @@ from xml.sax.saxutils import escape
 import aiohttp
 from defusedxml import ElementTree as DET
 
+from .security import limited_text
+
 LOGGER = logging.getLogger(__name__)
 
 _REQUEST_TEMPLATE = (
     '<?xml version="1.0" encoding="utf-8"?>'
     '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
     ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-    "<s:Body><u:{action} xmlns:u=\"{service}\">{args}</u:{action}></s:Body>"
+    '<s:Body><u:{action} xmlns:u="{service}">{args}</u:{action}></s:Body>'
     "</s:Envelope>"
 )
 
@@ -25,7 +27,7 @@ _RESPONSE_TEMPLATE = (
     '<?xml version="1.0" encoding="utf-8"?>'
     '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
     ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
-    "<s:Body><u:{action}Response xmlns:u=\"{service}\">{args}</u:{action}Response></s:Body>"
+    '<s:Body><u:{action}Response xmlns:u="{service}">{args}</u:{action}Response></s:Body>'
     "</s:Envelope>"
 )
 
@@ -80,15 +82,11 @@ def build_args(args: Mapping[str, object] | Iterable[tuple[str, object]]) -> str
 
 
 def build_request(service_type: str, action: str, args: Mapping[str, object]) -> str:
-    return _REQUEST_TEMPLATE.format(
-        action=action, service=service_type, args=build_args(args)
-    )
+    return _REQUEST_TEMPLATE.format(action=action, service=service_type, args=build_args(args))
 
 
 def build_response(service_type: str, action: str, args: Mapping[str, object]) -> str:
-    return _RESPONSE_TEMPLATE.format(
-        action=action, service=service_type, args=build_args(args)
-    )
+    return _RESPONSE_TEMPLATE.format(action=action, service=service_type, args=build_args(args))
 
 
 def build_fault(code: int, description: str = "") -> str:
@@ -165,8 +163,10 @@ def _fault_to_error(fault_el) -> UPnPError:
 class SoapClient:
     """Fires SOAP actions at a Sonos player over a shared aiohttp session."""
 
-    def __init__(self, session: aiohttp.ClientSession, timeout: float = 10.0) -> None:
+    def __init__(self, session: aiohttp.ClientSession, timeout: float = 10.0, policy=None) -> None:
         self._session = session
+        self.policy = policy
+        self.mutation_guard = None
         self._timeout = aiohttp.ClientTimeout(total=timeout)
 
     async def call(
@@ -176,6 +176,10 @@ class SoapClient:
         action: str,
         args: Mapping[str, object] | None = None,
     ) -> dict[str, str]:
+        if self.policy:
+            self.policy.validate_sonos_url(url)
+        if self.mutation_guard and not action.startswith(("Get", "Browse")):
+            await self.mutation_guard(url)
         payload = build_request(service_type, action, args or {})
         headers = {
             "Content-Type": 'text/xml; charset="utf-8"',
@@ -185,9 +189,13 @@ class SoapClient:
         LOGGER.debug("SOAP -> %s %s %s", url, action, args or {})
         try:
             async with self._session.post(
-                url, data=payload.encode("utf-8"), headers=headers, timeout=self._timeout
+                url,
+                data=payload.encode("utf-8"),
+                headers=headers,
+                timeout=self._timeout,
+                allow_redirects=False,
             ) as response:
-                text = await response.text()
+                text = await limited_text(response)
                 if response.status >= 400 and "Fault" not in text:
                     raise UPnPError(501, f"HTTP {response.status} from {url}")
                 return parse_response(text, action)

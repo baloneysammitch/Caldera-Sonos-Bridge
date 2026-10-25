@@ -23,7 +23,7 @@ from pathlib import Path
 LOGGER = logging.getLogger(__name__)
 
 BRIDGE_NAME = "Caldera Sonos Bridge"
-BRIDGE_VERSION = "0.1.11"
+BRIDGE_VERSION = "0.1.12"
 
 # Stable namespace so a given Sonos player always maps to the same Plex machine
 # identifier, across restarts and reinstalls.  Plex clients remember a player by
@@ -52,7 +52,10 @@ DEFAULT_GDM_PORT = 32412
 #: failing partway through.
 PLEX_PORTS = {
     32400,  # the server itself
-    32410, 32412, 32413, 32414,  # GDM
+    32410,
+    32412,
+    32413,
+    32414,  # GDM
     32469,  # DLNA
     32600,  # Tuner Service (DVR)
     3005,  # Plex Companion
@@ -146,6 +149,17 @@ class Config:
     multicast_ttl: int = 4
     gdm_enabled: bool = True
 
+    # Security policy is environment-only; settings.json cannot weaken it.
+    settings_bind: str = "127.0.0.1"
+    admin_token_file: str = ""
+    plex_server_address: str = ""
+    plex_server_port: int = 32400
+    plex_machine_identifier: str = ""
+    controller_networks: list[str] = field(default_factory=list)
+    allowed_origins: list[str] = field(default_factory=list)
+    sonos_devices: dict[str, str] = field(default_factory=dict)
+    require_standalone: bool = True
+
     # Plex -----------------------------------------------------------------
     config_dir: str = DEFAULT_CONFIG_DIR
     plex_token: str = ""
@@ -173,7 +187,7 @@ class Config:
     timeline_interval: float = 1.0
 
     # Updates --------------------------------------------------------------
-    update_check: bool = True
+    update_check: bool = False
     auto_update: bool = False
     update_check_interval: float = 21600.0  # six hours
 
@@ -189,6 +203,15 @@ class Config:
     def from_env(cls) -> Config:
         return cls(
             bridge_ip=_str("BRIDGE_IP", "").strip(),
+            settings_bind=_str("SETTINGS_BIND", "127.0.0.1"),
+            admin_token_file=_str("ADMIN_TOKEN_FILE", ""),
+            plex_server_address=_str("PLEX_SERVER_ADDRESS", ""),
+            plex_server_port=_int("PLEX_SERVER_PORT", 32400),
+            plex_machine_identifier=_str("PLEX_SERVER_MACHINE_ID", ""),
+            controller_networks=_list("CONTROLLER_NETWORKS"),
+            allowed_origins=_list("ALLOWED_ORIGINS"),
+            sonos_devices=dict(item.split("=", 1) for item in _list("SONOS_DEVICES")),
+            require_standalone=_bool("REQUIRE_STANDALONE", True),
             settings_port=_int("HTTP_PORT", DEFAULT_SETTINGS_PORT),
             player_port_base=_int("PLAYER_PORT_BASE", DEFAULT_PLAYER_PORT_BASE),
             gdm_port=_int("GDM_PORT", DEFAULT_GDM_PORT),
@@ -215,8 +238,8 @@ class Config:
             sonos_sub_timeout=_int("SONOS_SUB_TIMEOUT", 600),
             http_timeout=_float("HTTP_TIMEOUT", 10.0),
             timeline_interval=_float("TIMELINE_INTERVAL", 1.0),
-            update_check=_bool("UPDATE_CHECK", True),
-            auto_update=_bool("AUTO_UPDATE", False),
+            update_check=False,
+            auto_update=False,
             update_check_interval=_float("UPDATE_CHECK_INTERVAL", 21600.0),
             log_level=_str("LOG_LEVEL", "INFO").strip().upper(),
         )
@@ -278,9 +301,7 @@ class Config:
     def zone_allowed(self, zone_name: str) -> bool:
         """Apply the include/exclude filters (case-insensitive)."""
         name = zone_name.casefold()
-        if self.include_zones and not any(
-            name == zone.casefold() for zone in self.include_zones
-        ):
+        if self.include_zones and not any(name == zone.casefold() for zone in self.include_zones):
             return False
         return not any(name == zone.casefold() for zone in self.exclude_zones)
 

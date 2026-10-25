@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+import time
 from xml.sax.saxutils import quoteattr
 
 import aiohttp
@@ -26,6 +28,7 @@ from aiohttp import web
 from .config import BRIDGE_VERSION
 from .player import RoomPlayer
 from .plexauth import CAPABILITIES, DEVICE_CLASS, PLATFORM, PRODUCT
+from .security import SecurityError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,7 +54,6 @@ def _headers(player: RoomPlayer) -> dict[str, str]:
     return {
         "X-Plex-Client-Identifier": player.machine_identifier,
         "X-Plex-Protocol": "1.0",
-        **CORS_HEADERS,
     }
 
 
@@ -64,7 +66,9 @@ def _xml(player: RoomPlayer, body: str, status: int = 200) -> web.Response:
 
 
 def _ok(player: RoomPlayer) -> web.Response:
-    return _xml(player, '<?xml version="1.0" encoding="utf-8"?>\n<Response code="200" status="OK" />')
+    return _xml(
+        player, '<?xml version="1.0" encoding="utf-8"?>\n<Response code="200" status="OK" />'
+    )
 
 
 def resources_xml(player: RoomPlayer) -> str:
@@ -99,26 +103,36 @@ class TimelineSubscribers:
         self._subs: dict[str, dict[str, object]] = {}
 
     def add(self, host: str, port: int, protocol: str, client_id: str) -> None:
-        key = client_id or f"{host}:{port}"
+        if (
+            not client_id
+            or len(client_id) > 128
+            or not 1024 <= port <= 65535
+            or protocol not in ("http", "https")
+        ):
+            raise SecurityError("Invalid timeline callback")
+        now = time.monotonic()
+        self._subs = {k: v for k, v in self._subs.items() if v["expires"] > now}
+        key = f"{host}|{client_id}"
+        if key not in self._subs and len(self._subs) >= 32:
+            raise SecurityError("Timeline callback limit reached")
         self._subs[key] = {
+            "expires": now + 300,
             "url": f"{protocol or 'http'}://{host}:{port}/:/timeline",
             "failures": 0,
         }
         LOGGER.debug("Timeline subscriber %s", self._subs[key]["url"])
 
     def remove(self, client_id: str, host: str = "") -> None:
-        if client_id in self._subs:
-            del self._subs[client_id]
-            return
-        for key, sub in list(self._subs.items()):
-            if host and f"//{host}:" in str(sub["url"]):
-                del self._subs[key]
+        self._subs.pop(f"{host}|{client_id}", None)
 
     def __len__(self) -> int:
         return len(self._subs)
 
     async def publish(self, body: str, command_id: str) -> None:
         for key, sub in list(self._subs.items()):
+            if sub["expires"] < time.monotonic():
+                self._subs.pop(key, None)
+                continue
             url = f"{sub['url']}?commandID={command_id}"
             try:
                 async with self._session.post(
@@ -126,6 +140,7 @@ class TimelineSubscribers:
                     data=body.encode("utf-8"),
                     headers={"Content-Type": XML_TYPE},
                     timeout=aiohttp.ClientTimeout(total=5.0),
+                    allow_redirects=False,
                 ) as response:
                     if response.status < 400:
                         sub["failures"] = 0
@@ -142,7 +157,67 @@ class TimelineSubscribers:
 # Routes
 # ----------------------------------------------------------------------
 def create_app(player: RoomPlayer, subscribers: TimelineSubscribers) -> web.Application:
-    app = web.Application()
+    denials = {}
+
+    @web.middleware
+    async def boundary(request, handler):
+        policy = player.policy
+        try:
+            if not policy.allowed_peer(request.remote or ""):
+                raise SecurityError("Controller network is not approved")
+            origin = policy.validate_browser(request, player.config.bridge_ip)
+            target = request.headers.get("X-Plex-Target-Client-Identifier", "")
+            if target and target != player.machine_identifier:
+                raise SecurityError("Wrong player identifier")
+            command_id = request.query.get("commandID", "")
+            if command_id and not re.fullmatch(r"[0-9]{1,20}", command_id):
+                raise SecurityError("Invalid command identifier")
+            if len(request.query.getall("commandID", [])) > 1:
+                raise SecurityError("Duplicate command identifier")
+            if request.method != "OPTIONS" and request.path.startswith("/player/playback/"):
+                # A rejected request must not change room state or replace its
+                # media server/queue. Authorization precedes dispatch.
+                if request.path.endswith("/playMedia"):
+                    from .plexapi import PlexServer
+
+                    policy.canonical_server(
+                        PlexServer(
+                            address=request.query.get("address", ""),
+                            port=int(request.query.get("port", "32400")),
+                            protocol=request.query.get("protocol", "http"),
+                            machine_identifier=request.query.get("machineIdentifier", ""),
+                        )
+                    )
+                    if request.query.get("containerKey"):
+                        policy.validate_media_key(request.query["containerKey"], queue=True)
+                    if request.query.get("key"):
+                        policy.validate_media_key(request.query["key"])
+                await policy.authorize(request, player._plex._session)
+            response = await handler(request)
+        except (SecurityError, ValueError) as error:
+            reason = str(error) if isinstance(error, SecurityError) else "Malformed request"
+            key = (request.remote, request.path, reason)
+            now = time.monotonic()
+            if denials.get(key, 0) < now - 60:
+                if len(denials) >= 64:
+                    denials.pop(next(iter(denials)))
+                denials[key] = now
+                LOGGER.warning(
+                    "Companion rejected: peer=%s path=%s reason=%s",
+                    request.remote,
+                    request.path,
+                    reason,
+                )
+            return web.Response(status=403, text="Request is outside the configured trust policy")
+        except (TimeoutError, aiohttp.ClientError, OSError):
+            return web.Response(status=503, text="Controller authorization is unavailable")
+        if origin:
+            response.headers.update(CORS_HEADERS)
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+        return response
+
+    app = web.Application(middlewares=[boundary], client_max_size=16384)
     app[PLAYER_KEY] = player
     app[SUBS_KEY] = subscribers
 
@@ -204,16 +279,16 @@ async def handle_subscribe(request: web.Request) -> web.Response:
     except ValueError:
         port = 0
     if not port:
-        return _xml(player, '<?xml version="1.0"?>\n<Response code="400" status="Bad Request" />', 400)
+        return _xml(
+            player, '<?xml version="1.0"?>\n<Response code="400" status="Bad Request" />', 400
+        )
 
     host = request.remote or ""
     client_id = request.headers.get("X-Plex-Client-Identifier", "")
     request.app[SUBS_KEY].add(host, port, request.query.get("protocol", "http"), client_id)
     LOGGER.info("%s: a controller at %s subscribed to timelines", player.zone.name, host)
     # The subscriber expects a timeline promptly, not at the next state change.
-    asyncio.create_task(
-        request.app[SUBS_KEY].publish(player.timeline_xml(command_id), command_id)
-    )
+    asyncio.create_task(request.app[SUBS_KEY].publish(player.timeline_xml(command_id), command_id))
     return _ok(player)
 
 
@@ -236,6 +311,8 @@ async def handle_playback(request: web.Request) -> web.Response:
     LOGGER.debug("%s: %s %s", player.zone.name, command, _loggable(params))
     try:
         await _dispatch(player, command, params, dict(request.headers))
+    except SecurityError:
+        return _xml(player, '<?xml version="1.0"?><Response code="403" status="Forbidden"/>', 403)
     except Exception:
         LOGGER.exception("%s: %s failed", player.zone.name, command)
         return _xml(
