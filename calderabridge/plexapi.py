@@ -20,13 +20,13 @@ from urllib.parse import urlencode
 import aiohttp
 from defusedxml import ElementTree as DET
 
-from .config import BRIDGE_VERSION
+from .config import BRIDGE_NAME, BRIDGE_VERSION
 from .security import limited_text
 
 LOGGER = logging.getLogger(__name__)
 
 #: What the bridge calls itself to a Plex transcoder.
-PLEX_PRODUCT = "Caldera Sonos Bridge"
+PLEX_PRODUCT = BRIDGE_NAME
 
 #: Containers Sonos plays from an HTTP URL without help.  Anything outside this
 #: set has to be transcoded on the way out or the speaker will refuse it.

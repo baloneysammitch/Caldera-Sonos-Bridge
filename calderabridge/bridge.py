@@ -672,6 +672,24 @@ class Bridge:
         LOGGER.info("Plex account unlinked")
 
     # ------------------------------------------------------------------
+    async def health(self) -> dict[str, object]:
+        """Read every configured room's transport without changing playback."""
+        async def probe(uid):
+            player = self.players.get(uid)
+            if player is None or not self.policy.zone_allowed(player.zone):
+                return {"room": uid, "ready": False}
+            try:
+                info = await asyncio.wait_for(player.player().get_transport_info(), timeout=3)
+                ready = info.get("CurrentTransportState") in {
+                    "STOPPED", "PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING", "NO_MEDIA_PRESENT"
+                }
+            except Exception:
+                ready = False
+            return {"room": player.zone.name, "ready": ready}
+
+        rooms = await asyncio.gather(*(probe(uid) for uid in self.config.sonos_devices))
+        return {"healthy": bool(rooms) and all(r["ready"] for r in rooms), "rooms": rooms}
+
     async def status(self) -> dict[str, object]:
         rooms = [player.status() for player in self._room_list()]
         rooms.sort(key=lambda room: str(room["room"]).casefold())

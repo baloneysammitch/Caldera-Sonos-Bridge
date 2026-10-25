@@ -52,6 +52,7 @@ new device registration.
 Create a private environment file using your own addresses and identifiers:
 
 ```dotenv
+BRIDGE_NAME=Caldera Sonos Bridge
 BRIDGE_IP=192.0.2.10
 SETTINGS_BIND=127.0.0.1
 HTTP_PORT=32700
@@ -70,7 +71,8 @@ VOLUME_LIMIT=25
 CONFIG_DIR=/config
 ```
 
-The addresses above are documentation examples; replace them. The Plex machine
+The addresses above are documentation examples; replace them. `BRIDGE_NAME` sets
+the visible bridge/product label; `NAME_SUFFIX` may be empty for plain room names. The Plex machine
 identifier is available from the local server's `/identity` endpoint. Give the
 config directory to UID/GID 10001, with mode 0700. Back up identity, settings,
 controller-pair and port-assignment files together. Do not put tokens into Git or
@@ -114,6 +116,12 @@ Optional administrator API access requires `ADMIN_TOKEN_FILE` pointing to a
 process-owned 0600 file containing at least 32 random characters. Supply it in an
 `Authorization: Bearer ...` header. Neither browser forms nor a Plex playback
 token bypass that requirement. Do not enable this on an exposed route.
+
+The read-only `/healthz` endpoint checks every configured room's transport in
+parallel, with a three-second timeout per room. It returns HTTP 503 if a room is
+missing or unreachable and HTTP 200 only when all configured rooms respond.
+It sends no playback/grouping commands and exposes no Plex credentials. Use it
+for an uptime monitor over the same private status interface/proxy.
 
 ## Tests and maintenance
 

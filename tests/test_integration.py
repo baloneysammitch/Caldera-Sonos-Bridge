@@ -482,3 +482,38 @@ async def test_paired_controller_can_resume_the_native_queue_after_restart(
         assert household.player.transport_state == "PLAYING"
     finally:
         await restarted.stop()
+
+
+async def test_health_checks_every_room_without_playback_commands(bridge, household):
+    household.player.calls.clear()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://127.0.0.1:{SETTINGS_PORT}/healthz") as response:
+            assert response.status == 200
+            result = await response.json()
+    assert result["healthy"]
+    assert {room["room"] for room in result["rooms"]} == {"Kitchen", "Study"}
+    assert all(room["ready"] for room in result["rooms"])
+    assert [action for action, _ in household.player.calls] == ["GetTransportInfo"] * 2
+
+
+async def test_missing_configured_room_makes_health_unavailable(bridge):
+    bridge.players.pop(next(iter(bridge.players)))
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://127.0.0.1:{SETTINGS_PORT}/healthz") as response:
+            assert response.status == 503
+            assert not (await response.json())["healthy"]
+
+
+async def test_unreachable_room_makes_health_unavailable(bridge, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    player = next(iter(bridge.players.values()))
+    broken = SimpleNamespace(get_transport_info=AsyncMock(side_effect=TimeoutError))
+    monkeypatch.setattr(player, "player", lambda: broken)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://127.0.0.1:{SETTINGS_PORT}/healthz") as response:
+            assert response.status == 503
+            result = await response.json()
+    assert not result["healthy"]
+    assert sum(not room["ready"] for room in result["rooms"]) == 1

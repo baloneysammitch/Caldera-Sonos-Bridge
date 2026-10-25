@@ -61,6 +61,7 @@ def create_app(bridge) -> web.Application:
 
     app.router.add_get("/", handle_page)
     app.router.add_get("/status.json", handle_status_json)
+    app.router.add_get("/healthz", handle_health)
     app.router.add_post("/settings", handle_save)
     app.router.add_post("/settings/reset", handle_reset)
     app.router.add_post("/plex/link", handle_link)
@@ -87,6 +88,11 @@ def _player(request: web.Request):
 # ----------------------------------------------------------------------
 async def handle_status_json(request: web.Request) -> web.Response:
     return web.json_response(await _bridge(request).status())
+
+
+async def handle_health(request: web.Request) -> web.Response:
+    result = await _bridge(request).health()
+    return web.json_response(result, status=200 if result["healthy"] else 503)
 
 
 async def handle_save(request: web.Request) -> web.Response:
