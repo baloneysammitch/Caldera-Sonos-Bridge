@@ -103,6 +103,7 @@ token bypass that requirement. Do not enable this on an exposed route.
 
 ```bash
 python -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements.lock
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check calderabridge tests
