@@ -41,9 +41,11 @@ apps can still change grouping independently of this bridge.
 
 These defaults intentionally change the original project's open-LAN trust model.
 Use one configured room for an initial trial. Browser discovery and phone playback
-must be verified on the actual network before adding devices. Each mobile player
-must be registered with Plex under its own stable room identifier; an unrelated
-server token does not create that registration.
+should be checked on the actual network when adding devices. If the added rooms
+already appear and play, no separate PIN linking is needed. Some clients require
+account-based discovery instead; that optional fallback registers each player
+under its stable room identifier. An unrelated server token does not create a
+new device registration.
 
 ## Configuration
 
@@ -91,9 +93,9 @@ from approved LAN clients. The status page defaults to loopback; if a separate
 proxy is used, bind it only to that private interface. Terminate TLS at your
 existing reverse proxy. Introduce no WAN forward or public admin route.
 
-For Plex linking, run `python -m calderabridge.link --uid RINCON_EXAMPLE01400
---name "Kitchen (Sonos)"` with the same environment/config mount. Repeat for each
-allowlisted playable room, entering its code at https://plex.tv/link. Each room
+If a room is missing from account-based discovery, run `python -m calderabridge.link --uid RINCON_EXAMPLE01400
+--name "Kitchen (Sonos)"` with the same environment/config mount. Repeat only for
+missing allowlisted rooms, entering each code at https://plex.tv/link. Each room
 has a separately revocable credential in `players/<stable-room-uuid>.json` (0600,
 parent 0700). Existing `plex.json` identities remain supported without relinking
 or changing their UUID. The CLI retains already linked credentials. Start/restart

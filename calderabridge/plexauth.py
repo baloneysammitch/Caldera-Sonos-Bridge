@@ -7,15 +7,15 @@ same thing for the same reason.  A Plex player is found in one of two ways, and
 they are not equivalent:
 
   GDM      A Plex-flavoured multicast search on the local network.  Desktop
-           Plexamp and Plex Web use it.  Nothing leaves the LAN, and nothing
-           needs an account.
+           Plexamp and Plex Web can use it. Nothing leaves the LAN, and
+           nothing needs an account.
 
   plex.tv  The player is registered to your Plex account, which then hands out
            the local address to reach it on.  Plexamp on iOS and Android uses
-           only this - it sends no GDM traffic at all - so on a phone this is
-           the only way a room appears.
+           account discovery on some client/platform paths. Other tested
+           clients discover additional rooms without separate PIN linking.
 
-Linking puts each room's *identity* in your account, once.  Playback and control
+When needed, linking puts each room's *identity* in your account, once.  Playback and control
 still go straight to the bridge over the LAN afterwards, and audio never touches
 plex.tv at all.
 """
