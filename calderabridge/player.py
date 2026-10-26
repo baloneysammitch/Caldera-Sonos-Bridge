@@ -102,6 +102,9 @@ class RoomPlayer:
         #: so position N is ``_loaded[N - 1]`` - the mapping that lets a track
         #: change the speaker made on its own be reported to Plex correctly.
         self._loaded: list[PlexTrack] = []
+        # Keep the actual enqueued URLs, not just track numbers: another Sonos
+        # controller can replace the native queue while reusing its indices.
+        self._loaded_uris: list[str] = []
         self._queue_offset = 0  # index into queue.tracks of _loaded[0]
 
         self.state = STATE_STOPPED
@@ -448,16 +451,20 @@ class RoomPlayer:
     async def _load_queue(self, coordinator: SonosPlayer, window: list[PlexTrack]) -> None:
         """Queue mode: the speaker holds the tracks and moves between them."""
         await coordinator.clear_queue()
+        uris = []
         for track in window:
             uri, metadata = await self._track_uri(track)
             await coordinator.add_uri_to_queue(uri, metadata)
+            uris.append(uri)
         await coordinator.set_av_transport_uri(coordinator.queue_uri())
         await coordinator.seek("TRACK_NR", "1")
+        self._loaded_uris = uris
 
     async def _load_direct(self, coordinator: SonosPlayer, window: list[PlexTrack]) -> None:
         """Direct mode: one track on the transport, the next one staged."""
         uri, metadata = await self._track_uri(window[0])
         await coordinator.set_av_transport_uri(uri, metadata)
+        self._loaded_uris = []
         if len(window) > 1:
             next_uri, next_metadata = await self._track_uri(window[1])
             with contextlib.suppress(UPnPError, TimeoutError):
@@ -542,6 +549,7 @@ class RoomPlayer:
         for track in more:
             uri, metadata = await self._track_uri(track)
             await coordinator.add_uri_to_queue(uri, metadata)
+            self._loaded_uris.append(uri)
         self._loaded.extend(more)
         LOGGER.debug("%s: topped the queue up to %d tracks", self.zone.name, len(self._loaded))
 
@@ -565,6 +573,11 @@ class RoomPlayer:
     # Reading state back
     # ------------------------------------------------------------------
     async def refresh(self) -> None:
+        # Do not mistake our own queue replacement for an external takeover.
+        async with self._lock:
+            await self._refresh_locked()
+
+    async def _refresh_locked(self) -> None:
         """Reconcile with what the speaker is actually doing.
 
         Sonos is the authority here: it advances tracks by itself, and it can be
@@ -589,6 +602,19 @@ class RoomPlayer:
         track_number = 0
         with contextlib.suppress(ValueError, TypeError):
             track_number = int(position.get("Track", "0"))
+        uri = position.get("TrackURI", "")
+        if self._loaded_uris and uri and track_number > 0 and (
+            track_number > len(self._loaded_uris)
+            or uri != self._loaded_uris[track_number - 1]
+        ):
+            # Native audio remains authoritative and untouched. Drop the old
+            # Plex ownership so we cannot report or refill an unrelated queue.
+            self._loaded.clear()
+            self._loaded_uris.clear()
+            self._queue_offset = 0
+            self.queue = PlayQueue()
+            self.current = None
+            self.server = PlexServer()
         if 1 <= track_number <= len(self._loaded):
             track = self._loaded[track_number - 1]
             if track is not self.current:
@@ -664,7 +690,7 @@ class RoomPlayer:
     def _music_timeline(self) -> str:
         attrs: dict[str, object] = {
             "type": "music",
-            "state": self.state,
+            "state": self.state if self.current is not None else STATE_STOPPED,
             "controllable": CONTROLLABLE,
             "volume": self.volume,
             "mute": "1" if self.muted else "0",

@@ -47,6 +47,16 @@ account-based discovery instead; that optional fallback registers each player
 under its stable room identifier. An unrelated server token does not create a
 new device registration.
 
+## Native queue changes
+
+For queue playback, the bridge checks the speaker's current media URL against
+the URL it enqueued at that position. If another controller replaces the native
+queue or source, the old Plex queue identity is discarded. This prevents stale
+titles, false Plex progress reports and refilling somebody else's queue. Native
+audio continues untouched; the Companion timeline becomes stopped until fresh
+Plex media is selected. It does not reconstruct a Plex queue from unrelated
+Sonos metadata. Empty URLs during a track transition do not discard ownership.
+
 ## Configuration
 
 Create a private environment file using your own addresses and identifiers:
