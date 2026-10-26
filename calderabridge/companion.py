@@ -29,6 +29,7 @@ from .config import BRIDGE_VERSION
 from .player import RoomPlayer
 from .plexauth import CAPABILITIES, DEVICE_CLASS, PLATFORM, PRODUCT
 from .security import SecurityError
+from .soap import UPnPError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -313,6 +314,13 @@ async def handle_playback(request: web.Request) -> web.Response:
         await _dispatch(player, command, params, dict(request.headers))
     except SecurityError:
         return _xml(player, '<?xml version="1.0"?><Response code="403" status="Forbidden"/>', 403)
+    except (UPnPError, TimeoutError, aiohttp.ClientError, OSError) as error:
+        LOGGER.warning("%s: %s unavailable (%s)", player.zone.name, command, type(error).__name__)
+        return _xml(
+            player,
+            '<?xml version="1.0"?><Response code="503" status="Service Unavailable"/>',
+            503,
+        )
     except Exception:
         LOGGER.exception("%s: %s failed", player.zone.name, command)
         return _xml(

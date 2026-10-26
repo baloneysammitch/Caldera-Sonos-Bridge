@@ -141,3 +141,11 @@ Restart recovery preserves the room identity, ports and paired-controller record
 The bridge can resume an existing native Sonos queue if its current URI belongs
 to the configured Plex server. Full Plex queue context is not persisted: select
 fresh media to rebuild/extend that context after a process restart.
+
+Playback-state reconciliation preserves elapsed progress when pausing and resets
+the interpolation clock on resume, so time spent paused is not counted as music.
+Rejected/timed-out pause, resume, stop and seek commands return HTTP 503 and keep
+the last observed state; paused volume/mute changes wake waiting timeline polls.
+These paths have synthetic speaker/controller regression coverage. They do not
+establish that every Plexamp client or external-source/restart scenario stays in
+sync; full Plex queue context remains process-local.

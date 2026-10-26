@@ -315,11 +315,13 @@ class RoomPlayer:
                 return
             self.policy.validate_plex_url(uri)
         if await self._transport(lambda p: p.play()):
+            self._mark_position(self.position_now_ms)
             self.state = STATE_PLAYING
             self._wake()
 
     async def pause(self) -> None:
         await self._transport(lambda p: p.pause())
+        self._mark_position(self.position_now_ms)
         self.state = STATE_PAUSED
         self._wake()
 
@@ -557,7 +559,7 @@ class RoomPlayer:
         except (UPnPError, TimeoutError) as exc:
             self.last_error = str(exc)
             LOGGER.debug("%s: transport command failed: %s", self.zone.name, exc)
-            return False
+            raise
 
     # ------------------------------------------------------------------
     # Reading state back
@@ -572,7 +574,7 @@ class RoomPlayer:
         """
         coordinator = self.coordinator()
         room = self.player()
-        before = (self.state, self.current, self.position_ms // 5000)
+        before = (self.state, self.current, self.position_ms // 5000, self.volume, self.muted)
 
         try:
             transport = await coordinator.get_transport_info()
@@ -607,7 +609,7 @@ class RoomPlayer:
                 await self._top_up()
 
         await self._report()
-        if before != (self.state, self.current, self.position_ms // 5000):
+        if before != (self.state, self.current, self.position_ms // 5000, self.volume, self.muted):
             self._wake()
 
     async def _report(self) -> None:
