@@ -450,6 +450,10 @@ class RoomPlayer:
 
     async def _load_queue(self, coordinator: SonosPlayer, window: list[PlexTrack]) -> None:
         """Queue mode: the speaker holds the tracks and moves between them."""
+        # Plex supplies the order (including shuffled queues). An inherited
+        # native shuffle/repeat mode can reorder additions and invalidate the
+        # track-number/URI mapping at the first transition. Reset before edits.
+        await coordinator.set_play_mode("NORMAL")
         await coordinator.clear_queue()
         uris = []
         for track in window:

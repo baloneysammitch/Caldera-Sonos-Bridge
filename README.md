@@ -49,6 +49,12 @@ new device registration.
 
 ## Native queue changes
 
+Before loading a Plex queue, native Sonos playback mode is reset to `NORMAL`.
+Plex already supplies the playlist order, including its own shuffle. Retaining
+native shuffle can reorder added tracks and break the URI/track-number mapping
+on the next song; repeat-one can prevent advancement. A failed mode reset leaves
+the existing native queue intact. Other rooms' modes are untouched.
+
 For queue playback, the bridge checks the speaker's current media URL against
 the URL it enqueued at that position. If another controller replaces the native
 queue or source, the old Plex queue identity is discarded. This prevents stale

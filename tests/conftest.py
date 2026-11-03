@@ -25,6 +25,7 @@ class FakeSonos:
         self.queue: list[tuple[str, str]] = []  # (uri, metadata)
         self.track_index = 1
         self.transport_state = "STOPPED"
+        self.play_mode = "NORMAL"
         self.av_transport_uri = ""
         self.volume = 20
         self.mute = False
@@ -104,6 +105,9 @@ class FakeSonos:
 
     def _SetNextAVTransportURI(self, args):
         return {}
+
+    def _SetPlayMode(self, args):
+        self.play_mode = args['NewPlayMode']
 
     def _GetTransportInfo(self, args):
         return {
