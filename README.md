@@ -2,7 +2,7 @@
 
 Play a local Plex music library on a configured Sonos speaker from Plexamp.
 This fork of [Lewis Menzies' Caldera Sonos Bridge](https://github.com/meltface-80/Caldera-Sonos-Bridge)
-keeps its GPL-3.0-or-later license and stable player identities. Fork version: **0.1.12**.
+keeps its GPL-3.0-or-later license and stable player identities. Fork version: **0.1.13**.
 
 This is an experimental, independently maintained fork. It is not a Plex or Sonos
 product, and a passing package scan is not a guarantee of security. Existing Sonos
@@ -62,6 +62,14 @@ titles, false Plex progress reports and refilling somebody else's queue. Native
 audio continues untouched; the Companion timeline becomes stopped until fresh
 Plex media is selected. It does not reconstruct a Plex queue from unrelated
 Sonos metadata. Empty URLs during a track transition do not discard ownership.
+
+Spotify Connect can play from a virtual source while the local queue still
+contains Plex tracks. Its position response may report track number zero.
+That source mismatch now releases Plex ownership, including cached controls:
+a late Plex pause/stop/skip cannot operate the unrelated service. A fresh Plex
+media selection stops an active external source, selects the local queue, and
+confirms that transport selection before seeking or playing. Rejected starts
+are reported as failures instead of successful Plex playback.
 
 ## Configuration
 

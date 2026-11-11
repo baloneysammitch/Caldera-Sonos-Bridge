@@ -200,3 +200,11 @@ async def test_a_failing_command_reports_500(client, player, monkeypatch):
 
     monkeypatch.setattr(player, "play", boom)
     assert (await client.get("/player/playback/play")).status == 500
+
+
+async def test_failed_new_media_selection_returns_error_not_success(client, fake_sonos, fake_plex):
+    from calderabridge.soap import UPnPError
+
+    fake_sonos.errors['Play'] = UPnPError(701, 'Cannot start')
+    response = await client.get('/player/playback/playMedia', params=play_params(fake_plex))
+    assert response.status == 503

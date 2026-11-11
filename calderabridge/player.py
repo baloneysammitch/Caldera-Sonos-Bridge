@@ -308,15 +308,6 @@ class RoomPlayer:
         self._wake()
 
     async def play(self) -> None:
-        if not self._loaded:
-            # A process restart does not clear the speaker's native queue. Only
-            # resume an existing item belonging to our explicitly trusted PMS;
-            # do not take over a different service's paused playback.
-            position = await self.coordinator().get_position_info()
-            uri = position.get("TrackURI", "")
-            if not uri:
-                return
-            self.policy.validate_plex_url(uri)
         if await self._transport(lambda p: p.play()):
             self._mark_position(self.position_now_ms)
             self.state = STATE_PLAYING
@@ -427,7 +418,14 @@ class RoomPlayer:
                 await self._load_direct(coordinator, window)
             else:
                 await self._load_queue(coordinator, window)
+            if offset_ms > 0:
+                await coordinator.seek("REL_TIME", _hms(offset_ms / 1000.0))
+            # A successful SOAP acknowledgement does not establish which source
+            # will actually play. Never resume a retained cloud session blindly.
+            await coordinator.play()
+            await self._assert_plex_source(coordinator)
         except (UPnPError, TimeoutError) as exc:
+            self._release_plex()
             self.last_error = f"Sonos would not accept the track: {exc}"
             LOGGER.warning("%s: %s", self.zone.name, self.last_error)
             self.state = STATE_STOPPED
@@ -438,13 +436,6 @@ class RoomPlayer:
         self._loaded = list(window)
         self.current = window[0]
         self._mark_position(offset_ms)
-
-        if offset_ms > 0:
-            with contextlib.suppress(UPnPError, TimeoutError):
-                await coordinator.seek("REL_TIME", _hms(offset_ms / 1000.0))
-
-        with contextlib.suppress(UPnPError, TimeoutError):
-            await coordinator.play()
         self.state = STATE_PLAYING
         self._wake()
 
@@ -454,6 +445,14 @@ class RoomPlayer:
         # native shuffle/repeat mode can reorder additions and invalidate the
         # track-number/URI mapping at the first transition. Reset before edits.
         await coordinator.set_play_mode("NORMAL")
+        media = await coordinator.get_media_info()
+        source = media.get("CurrentURI", "")
+        if source and source != coordinator.queue_uri():
+            transport = await coordinator.get_transport_info()
+            if transport.get("CurrentTransportState") in {"PLAYING", "TRANSITIONING", "PAUSED_PLAYBACK"}:
+                # Only a fresh, explicit Plex media selection authorizes leaving
+                # another service. Ordinary cached controls never do this.
+                await coordinator.stop()
         await coordinator.clear_queue()
         uris = []
         for track in window:
@@ -461,6 +460,14 @@ class RoomPlayer:
             await coordinator.add_uri_to_queue(uri, metadata)
             uris.append(uri)
         await coordinator.set_av_transport_uri(coordinator.queue_uri())
+        for delay in (0, 0.1, 0.2, 0.4, 0.8):
+            if delay:
+                await asyncio.sleep(delay)
+            selected = await coordinator.get_media_info()
+            if selected.get("CurrentURI") == coordinator.queue_uri():
+                break
+        else:
+            raise UPnPError(701, "Sonos did not switch to the Plex queue")
         await coordinator.seek("TRACK_NR", "1")
         self._loaded_uris = uris
 
@@ -550,6 +557,7 @@ class RoomPlayer:
         if not more:
             return
         coordinator = self.coordinator()
+        await self._assert_plex_source(coordinator)
         for track in more:
             uri, metadata = await self._track_uri(track)
             await coordinator.add_uri_to_queue(uri, metadata)
@@ -563,9 +571,40 @@ class RoomPlayer:
             return 1 if self._loaded else 0
         return self._loaded.index(self.current) + 1
 
+    def _release_plex(self) -> None:
+        """Forget Plex identity without issuing a command to the native source."""
+        self._loaded.clear()
+        self._loaded_uris.clear()
+        self._queue_offset = 0
+        self.queue = PlayQueue()
+        self.current = None
+        self.server = PlexServer()
+
+    async def _assert_plex_source(self, coordinator: SonosPlayer) -> None:
+        from .security import SecurityError
+
+        position = await coordinator.get_position_info()
+        uri = position.get("TrackURI", "")
+        if not uri:
+            # Empty position is normal during a local queue transition. A
+            # nonlocal transport URI still provides positive contrary evidence.
+            media = await coordinator.get_media_info()
+            uri = media.get("CurrentURI", "")
+            if not uri or uri == coordinator.queue_uri():
+                return
+        if self._loaded_uris:
+            if uri in self._loaded_uris:
+                return
+            self._release_plex()
+            self._wake()
+            raise SecurityError("Speaker source changed; select Plex media again")
+        self.policy.validate_plex_url(uri)
+
     async def _transport(self, action) -> bool:
         try:
-            await action(self.coordinator())
+            coordinator = self.coordinator()
+            await self._assert_plex_source(coordinator)
+            await action(coordinator)
             self.last_error = ""
             return True
         except (UPnPError, TimeoutError) as exc:
@@ -607,18 +646,14 @@ class RoomPlayer:
         with contextlib.suppress(ValueError, TypeError):
             track_number = int(position.get("Track", "0"))
         uri = position.get("TrackURI", "")
-        if self._loaded_uris and uri and track_number > 0 and (
-            track_number > len(self._loaded_uris)
-            or uri != self._loaded_uris[track_number - 1]
+        if self._loaded_uris and uri and (
+            (track_number <= 0 and uri not in self._loaded_uris)
+            or track_number > len(self._loaded_uris)
+            or (track_number > 0 and uri != self._loaded_uris[track_number - 1])
         ):
             # Native audio remains authoritative and untouched. Drop the old
             # Plex ownership so we cannot report or refill an unrelated queue.
-            self._loaded.clear()
-            self._loaded_uris.clear()
-            self._queue_offset = 0
-            self.queue = PlayQueue()
-            self.current = None
-            self.server = PlexServer()
+            self._release_plex()
         if 1 <= track_number <= len(self._loaded):
             track = self._loaded[track_number - 1]
             if track is not self.current:

@@ -116,6 +116,9 @@ class FakeSonos:
             "CurrentSpeed": "1",
         }
 
+    def _GetMediaInfo(self, args):
+        return {"CurrentURI": self.av_transport_uri}
+
     def _GetPositionInfo(self, args):
         return {
             "Track": str(self.track_index),

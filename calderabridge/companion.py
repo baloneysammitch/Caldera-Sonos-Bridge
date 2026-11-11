@@ -312,6 +312,12 @@ async def handle_playback(request: web.Request) -> web.Response:
     LOGGER.debug("%s: %s %s", player.zone.name, command, _loggable(params))
     try:
         await _dispatch(player, command, params, dict(request.headers))
+        if command == "playMedia" and player.last_error:
+            return _xml(
+                player,
+                '<?xml version="1.0"?><Response code="503" status="Service Unavailable"/>',
+                503,
+            )
     except SecurityError:
         return _xml(player, '<?xml version="1.0"?><Response code="403" status="Forbidden"/>', 403)
     except (UPnPError, TimeoutError, aiohttp.ClientError, OSError) as error:

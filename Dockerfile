@@ -1,4 +1,4 @@
-FROM python:3.14-slim-trixie@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+FROM python:3.14-slim-trixie@sha256:ac25e5afbfdb4a94ff99cc24b0345719210133144481480bcba6085efa36a341
 LABEL org.opencontainers.image.title="Caldera Sonos Bridge security fork" \
       org.opencontainers.image.source="https://github.com/baloneysammitch/Caldera-Sonos-Bridge" \
       org.opencontainers.image.licenses="GPL-3.0-or-later"
@@ -12,6 +12,7 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY calderabridge ./calderabridge
 COPY LICENSE ./LICENSE
+RUN chmod -R a+rX /app
 RUN useradd --system --uid 10001 --no-create-home bridge \
     && mkdir -p /config && chown 10001:10001 /config
 USER 10001:10001
